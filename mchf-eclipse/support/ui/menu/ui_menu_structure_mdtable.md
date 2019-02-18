@@ -2,7 +2,7 @@
 [//]: # (                                                                              )
 [//]: # ( WARNING: generated data!  DO NOT EDIT MANUALLY ! ! !                         )
 [//]: # (                                                                              )
-[//]: # ( generated at  2018-09-04T08:27:56  by "./ui_menu_structure_mdtable.py" )
+[//]: # ( generated at  2019-02-07T07:58:46  by "./ui_menu_structure_mdtable.py" )
 [//]: # (                                                                              )
 [//]: # ( mcHF SDR TRX v.. - Menu Structure Diagram as MarkDown-Table )
 [//]: # (                                                                              )
@@ -11,7 +11,7 @@
 
 # uhsdr firmware v.. - UI Menu Overview
 
-generated at  2018-09-04T08:27:56  by "./ui_menu_structure_mdtable.py"
+generated at  2019-02-07T07:58:46  by "./ui_menu_structure_mdtable.py"
 
 
 
@@ -144,6 +144,8 @@ generated at  2018-09-04T08:27:56  by "./ui_menu_structure_mdtable.py"
 | **Lower Meter Colour**        (                     MENU_METER_COLOUR_DOWN) | Set the colour of the scale of combined SWR/AUD/ALC-Meter | 
 | **dBm display**               (                           MENU_DBM_DISPLAY) | RX signal power (measured within the filter bandwidth) can be displayed in dBm or normalized as dBm/Hz. This value is supposed to be quite accurate to +-3dB. Preferably use low spectrum display magnify settings. Accuracy is lower for very very weak and very very strong signals. | 
 | **dBm calibrate**             (                         MENU_DBM_CALIBRATE) | dBm display calibration. Just an offset (in dB) that is added to the internally calculated dBm or dBm/Hz value. | 
+| **S-Meter Attack**            (                       CONFIG_SMETER_ATTACK) | Attack controls how quickly the S-Meter reacts to rising signal levels, higher values represent quicker reaction | 
+| **S-Meter Decay**             (                        CONFIG_SMETER_DECAY) | Decay controls how quickly the S-Meter reacts to falling signal levels, higher values represent quicker reaction | 
 | **Freq display font**         (                             MENU_FREQ_FONT) | Font selection for frequency display. Allows selection of old/modern fonts | 
 | **Menu Inverse Scrolling**    (                  MENU_UI_INVERSE_SCROLLING) | Inverts Enc2/Enc3 behavior in menu up/down and show/hide UI scrolling actions, used for side-mounted encoder dials. | 
 
@@ -254,8 +256,8 @@ generated at  2018-09-04T08:27:56  by "./ui_menu_structure_mdtable.py"
 | --------------------------------------------------------------------------- | ---------------------------------------------- | 
 | **Display**                   (                               INFO_DISPLAY) | Displays working mode (SPI/parallel            | 
 | **Disp. Controller**          (                          INFO_DISPLAY_CTRL) | identified LCD controller chip                 | 
+| **Oscillator**                (                              INFO_OSC_NAME) | Local oscillator type                          | 
 | **SI570**                     (                                 INFO_SI570) | Startup frequency and I2C address of local oscillator Type SI570 | 
-| **SI5351A**                   (                               INFO_SI5351A) | Local oscillator type SI5351A detected.        | 
 | **EEPROM**                    (                                INFO_EEPROM) | type of serial EEPROM and its capacity         | 
 | **Touchscreen**               (                                    INFO_TP) | touchscreen state                              | 
 | **CPU**                       (                                   INFO_CPU) | identification of fitted MCU                   | 
@@ -266,6 +268,7 @@ generated at  2018-09-04T08:27:56  by "./ui_menu_structure_mdtable.py"
 | **Bootloader**                (                            INFO_BL_VERSION) | bootloader version                             | 
 | **RF Board**                  (                               INFO_RFBOARD) | Displays the detected RF Board hardware identification. | 
 | **Audio Codec Presence**      (                                 INFO_CODEC) | Audio Codec I2C communication successfully tested? This is not a full test of the Audio Codec functionality, it only reports if I2C communication reported no problem talking to the codec. | 
+| **Audio Codec Twinpeaks Corr.** (                       INFO_CODEC_TWINPEAKS) | In some cases the audio codec needs to be restarted to produce correct IQ. The IQ auto correction detects this. If this fixes the problem, Done is displayed, Failed otherwise | 
 | **Backup RAM Battery**        (                                  INFO_VBAT) | Battery Support for Backup RAM present?        | 
 | **Real Time Clock**           (                                   INFO_RTC) | Battery Supported Real Time Clock present?     | 
 | **FW license**                (                               INFO_LICENCE) | Display license of firmware                    | 
@@ -293,6 +296,27 @@ generated at  2018-09-04T08:27:56  by "./ui_menu_structure_mdtable.py"
 | **NR gain**                   (                        MENU_DEBUG_ANR_GAIN) | Gain of leaky LMS noise reduction              | 
 | **NR leak**                   (                        MENU_DEBUG_ANR_LEAK) | Leak of leaky LMS noise reduction              | 
 | **Si5351a PLL Reset**         (             MENU_DEBUG_OSC_SI5351_PLLRESET) | Debug Setting: Select when the Si5351a does a PLL RESET | 
+| **HMC1023 Coarse**            (                  MENU_DEBUG_HMC1023_COARSE) | Debug Setting: Change LPF HMC1023LP5E coarse bandwidth | 
+| **HMC1023 Fine**              (                    MENU_DEBUG_HMC1023_FINE) | Debug Setting: Change LPF HMC1023LP5E fine bandwidth | 
+| **HMC1023 Gain 10db**         (                    MENU_DEBUG_HMC1023_GAIN) | Debug Setting: Switch LPF HMC1023LP5E +10db Amp on/off | 
+| **HMC1023 Bypass**            (                  MENU_DEBUG_HMC1023_BYPASS) | Debug Setting: Set HMC1023 to bypass mode      | 
+| **HMC1023 Opamp Bias**        (                   MENU_DEBUG_HMC1023_OPAMP) | Debug Setting: Switch LPF HMC1023LP5E Opamp Bias | 
+| **HMC1023 Driver Bias**       (                    MENU_DEBUG_HMC1023_DRVR) | Debug Setting: Set HMC1023 Driver Bias         | 
+| **Trigger Twinpeaks Corr.**   (              MENU_DEBUG_TWINPEAKS_CORR_RUN) | Trigger Twinpeaks Correction Manually if IQ Auto Correction is enabled, otherwise you will see 'Not Possible' | 
+| **TX IQ Balance (20m)**       (                  CONFIG_20M_TX_IQ_GAIN_BAL) | IQ Balance Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 14.100 MHz. | 
+| **TX IQ Phase   (20m)**       (                 CONFIG_20M_TX_IQ_PHASE_BAL) | IQ Phase Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 14.100 MHz. | 
+| **TX IQ Balance (15m)**       (                  CONFIG_15M_TX_IQ_GAIN_BAL) | IQ Balance Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 21.100 MHz. | 
+| **TX IQ Phase   (15m)**       (                 CONFIG_15M_TX_IQ_PHASE_BAL) | IQ Phase Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 21.100 MHz. | 
+| **TX IQ Balance (10mUp)**     (               CONFIG_10M_UP_TX_IQ_GAIN_BAL) | IQ Balance Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 29.650 MHz. | 
+| **TX IQ Phase   (10mUp)**     (              CONFIG_10M_UP_TX_IQ_PHASE_BAL) | IQ Phase Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 29.650 MHz. | 
+| **TX IQ Balance (20m,CW)**    (        CONFIG_20M_TX_IQ_GAIN_BAL_TRANS_OFF) | IQ Balance Adjust for all transmission if frequency translation is OFF. Calibrate on 14.100 MHz. | 
+| **TX IQ Phase   (20m,CW)**    (       CONFIG_20M_TX_IQ_PHASE_BAL_TRANS_OFF) | IQ Phase Adjust for all transmission if frequency translation is OFF. Calibrate on 14.100 MHz. | 
+| **TX IQ Balance (15m,CW)**    (        CONFIG_15M_TX_IQ_GAIN_BAL_TRANS_OFF) | IQ Balance Adjust for all transmission if frequency translation is OFF. Calibrate on 21.100 MHz. | 
+| **TX IQ Phase   (15m,CW)**    (       CONFIG_15M_TX_IQ_PHASE_BAL_TRANS_OFF) | IQ Phase Adjust for all transmission if frequency translation is OFF. Calibrate on 21.100 MHz. | 
+| **TX IQ Balance (10mUp,CW)**  (     CONFIG_10M_UP_TX_IQ_GAIN_BAL_TRANS_OFF) | IQ Balance Adjust for all transmission if frequency translation is OFF. Calibrate on 29.650 MHz. | 
+| **TX IQ Phase   (10mUp,CW)**  (    CONFIG_10M_UP_TX_IQ_PHASE_BAL_TRANS_OFF) | IQ Phase Adjust for all transmission if frequency translation is OFF. Calibrate on 29.650 MHz. | 
+| **VSWR Protect. threshold**   (       MENU_DEBUG_VSWR_PROTECTION_THRESHOLD) | If not OFF, on TX/tune the bias of PA will be down to 0 when exceeding the specified value of VSWR | 
+| **Rst Conf EEPROM**           (          CONFIG_RESET_SER_EEPROM_SIGNATURE) | Clear the EEPROMi signature but keep all config values. This is mainly for debugging purposes). | 
 
 
 [//]: # ( EOFILE                                                                       )

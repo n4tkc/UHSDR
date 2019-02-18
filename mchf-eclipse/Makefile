@@ -9,6 +9,7 @@
 # Rev. 2016-04-06 cleanup - Stephan HB9ocq
 # Rev. 06/12/2016 possibility of choosing individual toolchain - Andreas Richter DF8OE
 # Rev. 2017-01-06 HB9ocq - added versioning of build: extracted from source, propagated to env.vars
+# Rev. 20/11/2018 RV9YW (m-chichikalov) - fixed limitation of parameter length on cmd.exe windows by passing all obj. as one file to linker
 
 #  -*- makefile -*-
 # if you want to build in a different directory than this one
@@ -17,16 +18,39 @@
 # for example to build the bootloader in the build-bl folder inside this directory
 # make -f ../Makefile ROOTLOC=".." bootloader 
 
+# to invoke asserts into the build use make with DEBUG=1; -> make -f "../Makefile" ROOTLOC=".." DEBUG=1 all
+
 # you can set the MCU you want to build for here or via environment variable (F4 or F4-512KB or F7 or H7)
 ifndef BUILDFOR
   BUILDFOR=F4
 endif
 
+# default value for building the mcHF UI board.
+ifndef CONFIGFLAGS
+  CONFIGFLAGS=-DUI_BRD_MCHF -DRF_BRD_MCHF
+endif
+
+# We have to use "override" since we pass some of these things from
+# the commandline but then change / append to it
+# see https://www.gnu.org/software/make/manual/html_node/Override-Directive.html#Override-Directive
+# BUILDFOR, CONFIGFLAGS are affected by this
+
+
 # F4-512KB results in "small build for F4"
 ifeq ($(BUILDFOR),F4-512KB)
-  BUILDFOR=F4
-  CONFIGFLAGS="-DIS_SMALL_BUILD"
+  FW_LINKERFILE_F4=arm-gcc-link_f4_flash512k.ld
+  override BUILDFOR=F4
+  override CONFIGFLAGS +=-DIS_SMALL_BUILD
+else
+  FW_LINKERFILE_F4=arm-gcc-link_f4_flash1024k.ld
 endif
+
+ifdef DEBUG
+  override CONFIGFLAGS += -DDEBUG -DUSE_FULL_ASSERT -DTRACE
+else
+  override CONFIGFLAGS += -DNDEBUG
+endif
+
 ifeq ($(BUILDFOR),F7)
   TRX_NAME="OVI40 F7"
 endif
@@ -34,8 +58,11 @@ ifeq ($(BUILDFOR),H7)
   TRX_NAME="OVI40 H7"
 endif
 
- ROOTLOC=.
-VPATH=$(ROOTLOC)
+ROOTLOC=.
+vpath %.h $(ROOTLOC)
+vpath %.c $(ROOTLOC)
+vpath %.cpp $(ROOTLOC)
+vpath %.S $(ROOTLOC)
 
 # you can set these environment to your individual values here or via environment variables
 # TRX_ID maximum lenght is 5 characters!!
@@ -47,9 +74,6 @@ ifeq ($(TRX_NAME),mcHF)
 endif
 ifndef TRX_NAME
   TRX_NAME='mcHF QRP'
-endif
-ifdef LCD_TYPE
-  CONFIGFLAGS += -DLCD_TYPE=$(LCD_TYPE)
 endif
 
 # If you want to hold different toolchains on Linux in /opt you can get them from
@@ -63,9 +87,9 @@ endif
 # OPT_GCC_ARM=
 
 ifdef OPT_GCC_ARM
-  PREFIX = $(OPT_GCC_ARM)
+  PREFIX = $(OPT_GCC_ARM)/bin/
 else
-  PREFIX = /usr
+  PREFIX = 
 endif
 
 # Under MacOS we have to use gsed instead of sed
@@ -76,11 +100,8 @@ ifeq ($(OS),Darwin)
   SED = gsed
 endif
 
-
-
-COMPILEFLAGS := -DUSE_HAL_DRIVER -DDEBUG -DUSE_FULL_ASSERT -DTRACE -D_GNU_SOURCE \
-	  -DTRX_ID=\"$(TRX_ID)\" -DTRX_NAME=\"$(TRX_NAME)\" $(CONFIGFLAGS) \
-	  -ffunction-sections -fdata-sections -flto -Wall -Wno-unused-function -g3
+COMPILEFLAGS := -D_GNU_SOURCE -DTRX_ID=\"$(TRX_ID)\" -DTRX_NAME=\"$(TRX_NAME)\" $(CONFIGFLAGS) -DUSE_HAL_DRIVER \
+	-ffunction-sections -fdata-sections -flto -Wall -Wuninitialized -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare -g3
 
 # identifying of "official builds by DF8OE"
 ifneq (,$(wildcard ../DF8OE))
@@ -92,18 +113,18 @@ MACHFLAGS_F4 := -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mthumb -DARM
 MACHFLAGS_F7 := -mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16    -mthumb -DARM_MATH_CM7 -DCORTEX_M7 -DSTM32F767xx -D__FPU_PRESENT=1
 MACHFLAGS_H7 := -mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16    -mthumb -DARM_MATH_CM7 -DCORTEX_M7 -DSTM32H743xx -D__FPU_PRESENT=1
 
-BASECFLAGS_F4  = $(MACHFLAGS_F4)  $(COMPILEFLAGS)  $(EXTRACFLAGS)
+BASECFLAGS_F4  = $(MACHFLAGS_F4)  $(COMPILEFLAGS) $(EXTRACFLAGS)
 BASECFLAGS_F7  = $(MACHFLAGS_F7)  $(COMPILEFLAGS) $(EXTRACFLAGS)
 BASECFLAGS_H7  = $(MACHFLAGS_H7)  $(COMPILEFLAGS) $(EXTRACFLAGS)
 
 LINKERLOC=$(ROOTLOC)/linker
 
-LDFLAGS_BASE := -L$(LINKERLOC) -flto --specs=nano.specs -g3
-LDFLAGS_F4 := $(LDFLAGS_BASE) $(MACHFLAGS_F4)
-LDFLAGS_F7 := $(LDFLAGS_BASE) $(MACHFLAGS_F7) 
-LDFLAGS_H7 := $(LDFLAGS_BASE) $(MACHFLAGS_H7) 
+LDFLAGS_BASE = -L$(LINKERLOC) -flto -g3 $(CFLAGS) $(CXXFLAGS)
+LDFLAGS_F4 = $(LDFLAGS_BASE) $(MACHFLAGS_F4)
+LDFLAGS_F7 = $(LDFLAGS_BASE) $(MACHFLAGS_F7) 
+LDFLAGS_H7 = $(LDFLAGS_BASE) $(MACHFLAGS_H7) 
 
-LIBS := -lm -lc -lnosys
+LIBS :=--specs=nosys.specs --specs=nano.specs
 
 # ------------- nothing to change below this line ---------------------- 
 
@@ -138,9 +159,7 @@ ifeq ($(BUILDFOR),F4)
 $(BOOTLOADER).elf : CFLAGS = ${BASECFLAGS_F4} -Os -DBOOTLOADER_BUILD
 $(FIRMWARE).elf : CFLAGS = ${BASECFLAGS_F4} -O2
 $(BOOTLOADER).elf : LDFLAGS = ${LDFLAGS_F4} -T$(LINKERLOC)/arm-gcc-link-bootloader_f4.ld
-$(FIRMWARE).elf : LDFLAGS = ${LDFLAGS_F4} -T$(LINKERLOC)/arm-gcc-link_f4_flash1024k.ld
-	
-
+$(FIRMWARE).elf : LDFLAGS = ${LDFLAGS_F4} -T$(LINKERLOC)/$(FW_LINKERFILE_F4)
 
 	# Every subdirectory with header files must be mentioned here
 	include $(ROOTLOC)/f4-include.mak
@@ -158,7 +177,6 @@ $(FIRMWARE).elf : CFLAGS = ${BASECFLAGS_F7} -O2
 $(BOOTLOADER).elf : LDFLAGS = ${LDFLAGS_F7} -T$(LINKERLOC)/arm-gcc-link-bootloader_f7.ld
 $(FIRMWARE).elf : LDFLAGS = ${LDFLAGS_F7} -T$(LINKERLOC)/arm-gcc-link_f7.ld
 
-
 	# Every subdirectory with header files must be mentioned here
 	include $(ROOTLOC)/f7-include.mak
 
@@ -175,7 +193,6 @@ $(FIRMWARE).elf : CFLAGS = ${BASECFLAGS_H7} -O2
 $(BOOTLOADER).elf : LDFLAGS = ${LDFLAGS_H7} -T$(LINKERLOC)/arm-gcc-link-bootloader_h7.ld
 $(FIRMWARE).elf : LDFLAGS = ${LDFLAGS_H7} -T$(LINKERLOC)/arm-gcc-link_h7.ld
 
-
 	# Every subdirectory with header files must be mentioned here
 	include $(ROOTLOC)/h7-include.mak
 
@@ -188,25 +205,17 @@ endif
 
 INC_DIRS = $(foreach d, $(SUBDIRS) $(HAL_SUBDIRS), -I$(ROOTLOC)/$d)
 
-CC = @${PREFIX}/bin/arm-none-eabi-gcc
-CXX = @${PREFIX}/bin/arm-none-eabi-g++
-OC = @${PREFIX}/bin/arm-none-eabi-objcopy
-OS = @${PREFIX}/bin/arm-none-eabi-size
-HEX2DFU = $(ROOTLOC)/support/hex2dfu/hex2dfu.py
-
-ifdef SystemRoot  # WINxx
-    CC = arm-none-eabi-gcc
-    CXX = arm-none-eabi-g++
-    OC = arm-none-eabi-objcopy
-    OS = arm-none-eabi-size
+ifdef VERBOSE
+	VPRE:=
+else
+	VPRE:=@
 endif
 
-ifdef MSYSTEM
-    CC = arm-none-eabi-gcc
-    CXX = arm-none-eabi-g++
-    OC = arm-none-eabi-objcopy
-    OS = arm-none-eabi-size
-endif
+CC      = $(VPRE)$(PREFIX)arm-none-eabi-gcc
+CXX     = $(VPRE)$(PREFIX)arm-none-eabi-g++
+OC      = $(VPRE)$(PREFIX)arm-none-eabi-objcopy
+SZ      = $(VPRE)$(PREFIX)arm-none-eabi-size
+HEX2DFU = $(VPRE)python $(ROOTLOC)/support/hex2dfu/hex2dfu.py
 
 
 ECHO = @echo
@@ -214,13 +223,7 @@ ECHO = @echo
 ifdef SystemRoot  # WINxx
     RM = del /Q
     FixPath = $(subst /,\,$1)
-else ifeq ($(shell uname), Linux)
-    RM = rm --force
-    FixPath = $1
-else ifeq ($(shell uname), Darwin)
-    RM = rm -f
-    FixPath = $1
-else ifeq ($(shell uname), CYGWIN_NT-10.0)
+else
     RM = rm -f
     FixPath = $1
 endif
@@ -233,6 +236,13 @@ BL_OBJS := $(patsubst %.S,%.o,$(patsubst %.cpp,%.o,$(BL_SRC:.c=.o)))
 BL_HAL_OBJS := $(patsubst %.S,%.o,$(patsubst %.cpp,%.o,$(BL_HAL_SRC:.c=.o)))
 
 $(DSPLIB_OBJS): EXTRA_CFLAGS:= -Wno-strict-aliasing
+basesw/%/usbh_mtp.o: CFLAGS += -Wno-implicit-fallthrough
+basesw/%/usbh_msc.o: CFLAGS += -Wno-implicit-fallthrough
+drivers/usb/%/usbh_hid.o: CFLAGS += -Wno-implicit-fallthrough
+basesw/%stm32h7xx_hal_spi.o: CFLAGS += -Wno-strict-aliasing
+basesw/%stm32f4xx_ll_usb.o: CFLAGS += -Wno-attributes
+basesw/%stm32f7xx_ll_usb.o: CFLAGS += -Wno-attributes
+basesw/%stm32h7xx_ll_usb.o: CFLAGS += -Wno-attributes
 
 .S.o:
 	$(ECHO) "  [CC] $@"
@@ -255,17 +265,17 @@ $(DSPLIB_OBJS): EXTRA_CFLAGS:= -Wno-strict-aliasing
 
 %.bin: %.elf
 	$(ECHO) "  [OBJC] $@"
-	$(OS) $<
+	$(SZ) $<
 	$(OC) -v -O binary $< $@
 
 %.hex: %.elf
 	$(ECHO) "  [BIN] $@"
-	$(OS) $<
+	$(SZ) $<
 	$(OC) -v -O ihex $< $@
 
 %.dfu: %.hex
 	$(ECHO) "  [H2D] $@"
-	$(OS) $<
+	$(SZ) $<
 	$(HEX2DFU) $< $@
 
 # ---------------------------------------------------------
@@ -308,13 +318,16 @@ $(BOOTLOADER):  $(BOOTLOADER).bin $(BOOTLOADER).dfu
 # compilation
 $(FIRMWARE).elf:  $(HAL_OBJS) $(DSPLIB_OBJS) $(OBJS)
 	$(ECHO) "  [LD] $@"
-	@$(CXX) $(LDFLAGS)  -Xlinker --gc-sections -Llibs -Wl,-Map,$(FIRMWARE).map -o$@ $^ $(LIBS)
+	@$(file > ./firmware_obj_list.lst,$^)
+	$(CXX) $(LDFLAGS) -Xlinker --gc-sections -Llibs -Wl,-Map,$(FIRMWARE).map -o$@ @./firmware_obj_list.lst $(LIBS)
+	$(RM) $(call FixPath,firmware_obj_list.lst)
 
 # compilation
 $(BOOTLOADER).elf:  $(BL_HAL_OBJS) $(BL_OBJS)
 	$(ECHO) "  [LD] $@"
-	$(CXX) $(LDFLAGS) -Xlinker --gc-sections -Llibs -Wl,-Map,$(BOOTLOADER).map -o$@ $^ $(LIBS)
-
+	@$(file > ./bootloader_obj_list.lst,$^)
+	$(CXX) $(LDFLAGS) -Xlinker --gc-sections -Llibs -Wl,-Map,$(BOOTLOADER).map -o$@ @./bootloader_obj_list.lst $(LIBS)
+	$(RM) $(call FixPath,bootloader_obj_list.lst)
 
 $(TRX_ID).handbook:
 	@$(ROOTLOC)/support/ui/menu/mk-menu-handbook auto
@@ -345,7 +358,6 @@ clean-libs:
 	# remove libs object files (.o)
 	$(RM) $(call FixPath,$(DSPLIB_OBJS))
 	$(RM) $(call FixPath,$(HAL_OBJS))
-
 
 clean:  clean-firmware clean-bootloader clean-libs
 	# remove the executables, map, dmp and all object files (.o)
@@ -393,7 +405,7 @@ handy:
 
 release:  
 	# generate quick operating guide
-	@inkscape --export-png=$(ROOTLOC)/useful_manuals/mcHF-quick-manual.png $(ROOTLOC)/useful_manuals/mcHF-quick-manual.svg
+	/@inkscape --export-png=$(ROOTLOC)/useful_manuals/mcHF-quick-manual.png $(ROOTLOC)/useful_manuals/mcHF-quick-manual.svg
 	@inkscape --export-pdf=$(ROOTLOC)/useful_manuals/mcHF-quick-manual.pdf $(ROOTLOC)/useful_manuals/mcHF-quick-manual.svg
 
 # EOFILE

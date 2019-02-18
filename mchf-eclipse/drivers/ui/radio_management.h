@@ -45,9 +45,9 @@ typedef struct DialFrequency
     bool    temp_factor_changed;
     uchar   temp_enabled;
 #define TCXO_MODE_MASK 0x0f
-#define TCXO_UNIT_MASK 0xf0
+#define TCXO_UNIT_MASK 0x10
 #define TCXO_UNIT_C 0x00
-#define TCXO_UNIT_F 0xf0
+#define TCXO_UNIT_F 0x10
 
 
     // Virtual segments
@@ -61,12 +61,20 @@ typedef struct DialFrequency
 // Frequency public
 extern DialFrequency               df;
 
+typedef enum
+{
+    TCXO_OFF =              0,      // TXCO temperature compensation off,
+    TCXO_ON  =              1,      // TCXO temperature compensation on
+    TCXO_STOP =             2,      // TXCO temperature compensation off, but read temperature sensor
+    TCXO_STATE_NUMBER               // Maximum setting for TCXO setting state
+} Tcxo_Mode_t;
 
-inline uint8_t RadioManagement_TcxoGetMode()
+
+inline Tcxo_Mode_t RadioManagement_TcxoGetMode()
 {
     return (df.temp_enabled & TCXO_MODE_MASK);
 }
-inline void RadioManagement_TcxoSetMode(uint8_t mode)
+inline void RadioManagement_TcxoSetMode(Tcxo_Mode_t mode)
 {
     df.temp_enabled = (df.temp_enabled & ~TCXO_MODE_MASK) | (mode & TCXO_MODE_MASK) ;
 }
@@ -85,6 +93,61 @@ inline bool RadioManagement_TcxoIsFahrenheit()
 {
     return (df.temp_enabled & TCXO_UNIT_MASK) == TCXO_UNIT_F;
 }
+
+// PA power level setting enumeration
+// this order MUST match the order of entries in power_levels in radio_management.c !
+typedef enum
+{
+    PA_LEVEL_FULL = 0,
+    PA_LEVEL_5W,
+    PA_LEVEL_2W,
+    PA_LEVEL_1W,
+    PA_LEVEL_0_5W,
+    PA_LEVEL_TUNE_KEEP_CURRENT
+} power_level_t;
+
+
+typedef struct {
+    power_level_t id;
+    char* name;
+    float32_t power_factor;
+    int32_t   mW;
+} power_level_desc_t;
+
+typedef struct {
+    const power_level_desc_t* levels;
+    const uint32_t count;
+} pa_power_levels_info_t;
+
+extern const pa_power_levels_info_t mchf_power_levelsInfo;
+
+
+#define PA_LEVEL_DEFAULT        PA_LEVEL_2W     // Default power level
+
+#define DEFAULT_FREQ_OFFSET     3000              // Amount of offset (at LO freq) when loading "default" frequency
+
+// this list MUST fit the order in the bandInfo structure defined in RadioManagement.h
+typedef enum
+{
+    BAND_MODE_80 = 0,
+    BAND_MODE_60 = 1,
+    BAND_MODE_40 = 2,
+    BAND_MODE_30 = 3,
+    BAND_MODE_20 = 4,
+    BAND_MODE_17 = 5,
+    BAND_MODE_15 = 6,
+    BAND_MODE_12 = 7,
+    BAND_MODE_10 = 8,
+    BAND_MODE_6 =  9,
+    BAND_MODE_4 =  10,
+    BAND_MODE_2 =  11,
+    BAND_MODE_70 = 12,
+    BAND_MODE_23 = 13,
+    BAND_MODE_2200 = 14,
+    BAND_MODE_630 = 15,
+    BAND_MODE_160 = 16,
+    BAND_MODE_GEN = 17          // General Coverage
+} band_mode_t;
 
 
 typedef enum
@@ -111,7 +174,22 @@ typedef struct BandInfo
 } BandInfo;
 
 extern const BandInfo bandInfo[MAX_BAND_NUM];
-// FIXME: for technical reasons defined in ui_menu.c
+
+typedef struct band_regs_s
+{
+    VfoReg band[MAX_BAND_NUM];
+    bool enabled[MAX_BAND_NUM]; // we store which band is to be used (or ignored)
+} BandRegs;
+
+enum
+{
+    // VFO_WORK = 0
+    VFO_A = 0,
+    VFO_B,
+    VFO_MAX
+};
+// Working register plus VFO A and VFO B registers.
+extern BandRegs vfo[VFO_MAX];
 
 
 // SWR and RF power meter public
@@ -134,6 +212,8 @@ typedef struct SWRMeter
     uchar   sensor_null;        // used to null out the sensor offset voltage
 
     uint8_t coupling_calc[COUPLING_MAX];
+
+    bool high_vswr_detected;
 
 } SWRMeter;
 
@@ -211,9 +291,9 @@ inline bool RadioManagement_IsTxDisabledBy(uint8_t whom)
 }
 
 uint32_t RadioManagement_GetRealFreqTranslationMode(uint32_t txrx_mode, uint32_t dmod_mode, uint32_t iq_freq_mode);
-uint8_t RadioManagement_GetBand(ulong freq);
+band_mode_t RadioManagement_GetBand(ulong freq);
 bool RadioManagement_FreqIsInBand(const BandInfo* bandinfo, const uint32_t freq);
-bool RadioManagement_PowerLevelChange(uint8_t band, uint8_t power_level);
+bool RadioManagement_SetPowerLevel(band_mode_t band, power_level_t power_level);
 bool RadioManagement_Tune(bool tune);
 bool RadioManagement_UpdatePowerAndVSWR();
 void RadioManagement_SetHWFiltersForFrequency(ulong freq);
@@ -228,10 +308,8 @@ uint32_t RadioManagement_NextAlternativeDemodMode(uint32_t loc_mode);
 Oscillator_ResultCodes_t RadioManagement_ValidateFrequencyForTX(uint32_t dial_freq);
 bool RadioManagement_IsApplicableDemodMode(uint32_t demod_mode);
 void RadioManagement_SwitchTxRx(uint8_t txrx_mode, bool tune_mode);
-void RadioManagement_SetBandPowerFactor(uchar band);
 bool RadioManagement_LSBActive(uint16_t dmod_mode);
 bool RadioManagement_USBActive(uint16_t dmod_mode);
-void RadioManagement_SetBandPowerFactor(uchar band);
 void RadioManagement_SetPaBias();
 bool RadioManagement_CalculateCWSidebandMode(void);
 void RadioManagement_SetDemodMode(uint8_t new_mode);
@@ -240,6 +318,7 @@ const cw_mode_map_entry_t* RadioManagement_CWConfigValueToModeEntry(uint8_t cw_o
 uint8_t RadioManagement_CWModeEntryToConfigValue(const cw_mode_map_entry_t* mode_entry);
 bool RadioManagement_UsesBothSidebands(uint16_t dmod_mode);
 bool RadioManagement_IsPowerFactorReduce(uint32_t freq);
+bool RadioManagement_UsesTxSidetone();
 void RadioManagement_ToggleVfoAB();
 
 bool RadioManagement_FmDevIs5khz();
@@ -249,6 +328,11 @@ uint32_t RadioManagement_GetTXDialFrequency();
 uint32_t RadioManagement_GetRXDialFrequency();
 int32_t  RadioManagement_GetCWDialOffset();
 
+void RadioManagement_Request_TxOn();
+void RadioManagement_Request_TxOff();
+
+bool RadioManagement_SwitchTxRx_Possible();
+bool RadioManagement_IsTxAtZeroIF(uint8_t dmod_mode, uint8_t digital_mode);
 
 inline void RadioManagement_ToggleVfoMem()
 {
@@ -265,5 +349,19 @@ inline bool is_demod_psk()
 	return ts.dmod_mode == DEMOD_DIGI && ts.digital_mode == DigitalMode_BPSK;
 }
 
+inline void RadioManagement_TxRxSwitching_Disable()
+{
+    ts.txrx_switching_enabled = false;
+}
+
+inline void RadioManagement_TxRxSwitching_Enable()
+{
+    ts.txrx_switching_enabled = true;
+}
+
+inline bool RadioManagement_TxRxSwitching_IsEnabled()
+{
+    return ts.txrx_switching_enabled;
+}
 
 #endif /* DRIVERS_UI_RADIO_MANAGEMENT_H_ */

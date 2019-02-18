@@ -1,6 +1,8 @@
 #include "ui_menu.h"
 #include "ui_menu_internal.h"
-
+#include "uhsdr_hmc1023.h"
+#include "radio_management.h"
+#include "soft_tcxo.h"
 /*
  * How to create a new menu entry in an existing menu:
  * - Copy an existing entry of MENU_KIND and paste at the desired position
@@ -96,8 +98,8 @@ const MenuDescriptor baseGroup[] =
     { MENU_BASE, MENU_ITEM, MENU_ALC_POSTFILT_GAIN, NULL, "TX ALC Input Gain", UiMenuDesc("If Audio Compressor Config is set to CUSTOM, sets the value of the ALC Input Gain. Otherwise shows predefined value of selected compression level.") },
     { MENU_BASE, MENU_ITEM, MENU_NOISE_BLANKER_SETTING, NULL, "RX NB Setting", UiMenuDesc("Set the Noise Blanker strength. Higher values mean more agressive blanking. Also changeable using Encoder 2 if Noise Blanker is active.") },
     { MENU_BASE, MENU_ITEM, MENU_DSP_NR_STRENGTH, NULL, "DSP NR Strength", UiMenuDesc("Set the Noise Reduction Strength. Higher values mean more agressive noise reduction but also higher CPU load. Use with extreme care. Also changeable using Encoder 2 if DSP is active.") }, // via knob
-    { MENU_BASE, MENU_ITEM, MENU_TCXO_MODE, &ts.si570_is_present, "TCXO Off/On/Stop", UiMenuDesc("The software TCXO can be turned ON (set frequency is adjusted so that generated frequency matches the wanted frequency); OFF (no correction or measurement done); or STOP (no correction but measurement).") },
-    { MENU_BASE, MENU_ITEM, MENU_TCXO_C_F, &ts.si570_is_present, "TCXO Temp. (C/F)", UiMenuDesc("Show the measure TCXO temperature in Celsius or Fahrenheit.") },
+    { MENU_BASE, MENU_ITEM, MENU_TCXO_MODE, NULL, "TCXO Off/On/Stop", UiMenuDesc("The software TCXO can be turned ON (set frequency is adjusted so that generated frequency matches the wanted frequency); OFF (no correction or measurement done); or STOP (no correction but measurement).") },
+    { MENU_BASE, MENU_ITEM, MENU_TCXO_C_F, &lo.sensor_present, "TCXO Temp. (C/F)", UiMenuDesc("Show the measure TCXO temperature in Celsius or Fahrenheit.") },
 #ifdef USE_CONFIGSTORAGE_FLASH
     { MENU_BASE, MENU_ITEM, MENU_BACKUP_CONFIG, NULL, "Backup Config", UiMenuDesc("Backup your I2C Configuration to flash. If you don't have suitable I2C EEPROM installed this function is not available.") },
 #endif
@@ -157,7 +159,7 @@ const MenuDescriptor confGroup[] =
     { MENU_CONF, MENU_ITEM, CONFIG_RF_FWD_PWR_NULL, NULL, "Pwr. Det. Null", UiMenuDesc(" Set the forward and reverse power sensors ADC zero power offset. This setting is enabled ONLY when Disp. Pwr (mW), is enabled. Needs SWR meter hardware modification to work. See Wiki Adjustment and Calibration.") },
     { MENU_CONF, MENU_ITEM, CONFIG_FWD_REV_SENSE_SWAP, NULL, "SWR/PWR Meter FWD/REV Swap", UiMenuDesc("Exchange the assignment of the Power/SWR FWD and REV measurement ADC. Use if your power meter does not show anything during TX.") },
 
-#ifdef UI_BRD_MCHF
+#ifdef STM32F4
     // Not supported on STM32F7 HAL
     { MENU_CONF, MENU_ITEM, CONFIG_I2C1_SPEED, NULL,"I2C1 Bus Speed", UiMenuDesc("Sets speed of the I2C1 bus (Si570 oscillator and MCP9801 temperature sensor). Higher speeds provide quicker RX/TX switching but may also cause tuning issues (red digits). Be careful with speeds above 200 kHz.") },
     { MENU_CONF, MENU_ITEM, CONFIG_I2C2_SPEED, NULL,"I2C2 Bus Speed", UiMenuDesc("Sets speed of the I2C2 bus (Audio Codec and I2C EEPROM). Higher speeds provide quicker RX/TX switching, configuration save and power off. Speeds above 200 kHz are not recommended for unmodified mcHF. Many modified mcHF seem to run with 300kHz without problems.") },
@@ -236,6 +238,8 @@ const MenuDescriptor displayGroup[] =
     { MENU_DISPLAY, MENU_ITEM, MENU_METER_COLOUR_DOWN, NULL, "Lower Meter Colour", UiMenuDesc("Set the colour of the scale of combined SWR/AUD/ALC-Meter") },
     { MENU_DISPLAY, MENU_ITEM, MENU_DBM_DISPLAY, NULL, "dBm display", UiMenuDesc("RX signal power (measured within the filter bandwidth) can be displayed in dBm or normalized as dBm/Hz. This value is supposed to be quite accurate to +-3dB. Preferably use low spectrum display magnify settings. Accuracy is lower for very very weak and very very strong signals.")},
     { MENU_DISPLAY, MENU_ITEM, MENU_DBM_CALIBRATE, NULL, "dBm calibrate", UiMenuDesc("dBm display calibration. Just an offset (in dB) that is added to the internally calculated dBm or dBm/Hz value.")},
+    { MENU_DISPLAY, MENU_ITEM, CONFIG_SMETER_ATTACK, NULL, "S-Meter Attack", UiMenuDesc("Attack controls how quickly the S-Meter reacts to rising signal levels, higher values represent quicker reaction") },
+    { MENU_DISPLAY, MENU_ITEM, CONFIG_SMETER_DECAY, NULL, "S-Meter Decay", UiMenuDesc("Decay controls how quickly the S-Meter reacts to falling signal levels, higher values represent quicker reaction") },
 #ifdef USE_8bit_FONT
 	{ MENU_DISPLAY, MENU_ITEM, MENU_FREQ_FONT, NULL, "Freq display font", UiMenuDesc("Font selection for frequency display. Allows selection of old/modern fonts")},
 #endif
@@ -370,11 +374,9 @@ const MenuDescriptor infoGroup[] =
 {
     { MENU_SYSINFO, MENU_INFO, INFO_DISPLAY, NULL,"Display", UiMenuDesc("Displays working mode (SPI/parallel") },
     { MENU_SYSINFO, MENU_INFO, INFO_DISPLAY_CTRL, NULL,"Disp. Controller", UiMenuDesc("identified LCD controller chip") },
+    { MENU_SYSINFO, MENU_INFO, INFO_OSC_NAME, NULL,"Oscillator", UiMenuDesc("Local oscillator type") },
 #ifdef USE_OSC_SI570
     { MENU_SYSINFO, MENU_INFO, INFO_SI570, NULL,"SI570", UiMenuDesc("Startup frequency and I2C address of local oscillator Type SI570") },
-#endif
-#ifdef USE_OSC_SI5351A
-    { MENU_SYSINFO, MENU_INFO, INFO_SI5351A, NULL,"SI5351A", UiMenuDesc("Local oscillator type SI5351A detected.") },
 #endif
     { MENU_SYSINFO, MENU_INFO, INFO_EEPROM, NULL,"EEPROM", UiMenuDesc("type of serial EEPROM and its capacity") },
     { MENU_SYSINFO, MENU_INFO, INFO_TP, NULL,"Touchscreen", UiMenuDesc("touchscreen state") },
@@ -386,6 +388,7 @@ const MenuDescriptor infoGroup[] =
     { MENU_SYSINFO, MENU_INFO, INFO_BL_VERSION, NULL,"Bootloader", UiMenuDesc("bootloader version") },
     { MENU_SYSINFO, MENU_INFO, INFO_RFBOARD, NULL,"RF Board", UiMenuDesc("Displays the detected RF Board hardware identification.") },
     { MENU_SYSINFO, MENU_INFO, INFO_CODEC, NULL,"Audio Codec Presence", UiMenuDesc("Audio Codec I2C communication successfully tested? This is not a full test of the Audio Codec functionality, it only reports if I2C communication reported no problem talking to the codec.") },
+    { MENU_SYSINFO, MENU_INFO, INFO_CODEC_TWINPEAKS, NULL,"Audio Codec Twinpeaks Corr.", UiMenuDesc("In some cases the audio codec needs to be restarted to produce correct IQ. The IQ auto correction detects this. If this fixes the problem, Done is displayed, Failed otherwise") },
     { MENU_SYSINFO, MENU_INFO, INFO_VBAT, NULL,"Backup RAM Battery", UiMenuDesc("Battery Support for Backup RAM present?") },
     { MENU_SYSINFO, MENU_INFO, INFO_RTC, NULL,"Real Time Clock", UiMenuDesc("Battery Supported Real Time Clock present?") },
     { MENU_SYSINFO, MENU_INFO, INFO_LICENCE, NULL,"FW license", UiMenuDesc("Display license of firmware") },
@@ -437,13 +440,35 @@ const MenuDescriptor debugGroup[] =
 	{ MENU_DEBUG, MENU_ITEM, MENU_DEBUG_ANR_LEAK, NULL,"NR leak", UiMenuDesc("Leak of leaky LMS noise reduction") },
 #endif
 	{ MENU_DEBUG, MENU_ITEM, MENU_DEBUG_OSC_SI5351_PLLRESET, NULL,"Si5351a PLL Reset", UiMenuDesc("Debug Setting: Select when the Si5351a does a PLL RESET") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_HMC1023_COARSE, &hmc1023.present,"HMC1023 Coarse", UiMenuDesc("Debug Setting: Change LPF HMC1023LP5E coarse bandwidth") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_HMC1023_FINE, &hmc1023.present,"HMC1023 Fine", UiMenuDesc("Debug Setting: Change LPF HMC1023LP5E fine bandwidth") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_HMC1023_GAIN, &hmc1023.present,"HMC1023 Gain 10db", UiMenuDesc("Debug Setting: Switch LPF HMC1023LP5E +10db Amp on/off") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_HMC1023_BYPASS, &hmc1023.present,"HMC1023 Bypass", UiMenuDesc("Debug Setting: Set HMC1023 to bypass mode") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_HMC1023_OPAMP, &hmc1023.present,"HMC1023 Opamp Bias", UiMenuDesc("Debug Setting: Switch LPF HMC1023LP5E Opamp Bias") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_HMC1023_DRVR, &hmc1023.present,"HMC1023 Driver Bias", UiMenuDesc("Debug Setting: Set HMC1023 Driver Bias") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_TWINPEAKS_CORR_RUN, NULL,"Trigger Twinpeaks Corr.", UiMenuDesc("Trigger Twinpeaks Correction Manually if IQ Auto Correction is enabled, otherwise you will see 'Not Possible'") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_20M_TX_IQ_GAIN_BAL, NULL, "TX IQ Balance (20m)", UiMenuDesc("IQ Balance Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 14.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_20M_TX_IQ_PHASE_BAL, NULL, "TX IQ Phase   (20m)", UiMenuDesc("IQ Phase Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 14.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_15M_TX_IQ_GAIN_BAL, NULL, "TX IQ Balance (15m)", UiMenuDesc("IQ Balance Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 21.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_15M_TX_IQ_PHASE_BAL, NULL, "TX IQ Phase   (15m)", UiMenuDesc("IQ Phase Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 21.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_10M_UP_TX_IQ_GAIN_BAL, NULL, "TX IQ Balance (10mUp)", UiMenuDesc("IQ Balance Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 29.650 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_10M_UP_TX_IQ_PHASE_BAL, NULL, "TX IQ Phase   (10mUp)", UiMenuDesc("IQ Phase Adjust for all transmission if frequency translation is NOT OFF. Calibrate on 29.650 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_20M_TX_IQ_GAIN_BAL_TRANS_OFF, NULL, "TX IQ Balance (20m,CW)", UiMenuDesc("IQ Balance Adjust for all transmission if frequency translation is OFF. Calibrate on 14.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_20M_TX_IQ_PHASE_BAL_TRANS_OFF, NULL, "TX IQ Phase   (20m,CW)", UiMenuDesc("IQ Phase Adjust for all transmission if frequency translation is OFF. Calibrate on 14.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_15M_TX_IQ_GAIN_BAL_TRANS_OFF, NULL, "TX IQ Balance (15m,CW)", UiMenuDesc("IQ Balance Adjust for all transmission if frequency translation is OFF. Calibrate on 21.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_15M_TX_IQ_PHASE_BAL_TRANS_OFF, NULL, "TX IQ Phase   (15m,CW)", UiMenuDesc("IQ Phase Adjust for all transmission if frequency translation is OFF. Calibrate on 21.100 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_10M_UP_TX_IQ_GAIN_BAL_TRANS_OFF, NULL, "TX IQ Balance (10mUp,CW)", UiMenuDesc("IQ Balance Adjust for all transmission if frequency translation is OFF. Calibrate on 29.650 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_10M_UP_TX_IQ_PHASE_BAL_TRANS_OFF, NULL, "TX IQ Phase   (10mUp,CW)", UiMenuDesc("IQ Phase Adjust for all transmission if frequency translation is OFF. Calibrate on 29.650 MHz.") },
+    { MENU_DEBUG, MENU_ITEM, MENU_DEBUG_VSWR_PROTECTION_THRESHOLD, NULL, "VSWR Protect. threshold", UiMenuDesc("If not OFF, on TX/tune the bias of PA will be down to 0 when exceeding the specified value of VSWR") },
+    { MENU_DEBUG, MENU_ITEM, CONFIG_RESET_SER_EEPROM_SIGNATURE, NULL, "Rst Conf EEPROM", UiMenuDesc("Clear the EEPROMi signature but keep all config values. This is mainly for debugging purposes).") },
+
 	{ MENU_DEBUG, MENU_STOP, 0, NULL, NULL, UiMenuDesc("") }
 };
 
 const MenuDescriptor hall_of_fameGroup[] =
 {
-    { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"M0NKA  (Chris) founder of mcHF", UiMenuDesc("") },
-    { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"KA7OEI (Clint) 1st great work", UiMenuDesc("") },
+    { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"M0NKA  (Chris) mcHF founder", UiMenuDesc("") },
+    { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"KA7OEI (Clint) 1st great FW", UiMenuDesc("") },
     { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"DF8OE  (Andreas)", UiMenuDesc("") },
     { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"DL4SAI (Harald)", UiMenuDesc("") },
     { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"DB4PLE (Danilo)", UiMenuDesc("") },
@@ -457,6 +482,9 @@ const MenuDescriptor hall_of_fameGroup[] =
     { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"S53DZ  (Bojan)", UiMenuDesc("") },
     { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"SP9BSL (Slawek)", UiMenuDesc("") },
     { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"HB9GND (Dimce)", UiMenuDesc("") },
+    { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"MM0MZW (Mike)", UiMenuDesc("") },
+    { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"ex UA9YPF (Yuri)", UiMenuDesc("") },
+    { MENU_HALL_OF_FAME, MENU_TEXT, 0, NULL,"RV9YW  (Max)", UiMenuDesc("") },
 
     { MENU_HALL_OF_FAME, MENU_STOP, 0, NULL, NULL, UiMenuDesc("") }
 };

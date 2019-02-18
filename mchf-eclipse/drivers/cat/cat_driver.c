@@ -47,14 +47,14 @@ static void CatDriver_CatEnableTX(bool enable)
     {
         if(RadioManagement_IsTxDisabled() == false)
         {
-            ts.ptt_req = true;
+            RadioManagement_Request_TxOn();
             cat_driver.cat_ptt_active = true;
         }
     }
     else
     {
-        ts.ptt_req = false;
         cat_driver.cat_ptt_active = false;
+        RadioManagement_Request_TxOff();
     }
 }
 
@@ -588,6 +588,18 @@ bool CatDriver_Ft817_EEPROM_RW_Func(bool readEEPROM, uint16_t addr, uint8_t* dat
             // TODO: If memmode gets implmented, we need more complex handling here
             retval = true;
             break;
+        case 0x65:
+            // lower bits not relevant bits 5-7
+            // 000 -> RTTY
+            // 001 -> PSK31-L
+            // 010 -> PSK31-U
+            // 011 -> USER-L
+            // 100 -> USER-U
+            // we always report USER-U/USER-L independent from currently selected digital mode
+            // on the UHSDR TRX
+            *data_p = RadioManagement_LSBActive(DEMOD_DIGI) ? 0b01100000 : 0b10000000;
+            retval = true;
+            break;
         case 0x79:
         {
             // Used by: HRD
@@ -643,6 +655,7 @@ static const ft817_eeprom_emul_t ft817_eeprom[] =
         { .type = FT817EE_DATA,     .start = 5,     .end = 5,       .content.value = 0xBF   }, // radio config
         { .type = FT817EE_FUNC,     .start = 0x55,  .end = 0x55,    .content.funcPtr = CatDriver_Ft817_EEPROM_RW_Func }, // VOX Delay and other stuff, fixed value, required by WSJT-X
         { .type = FT817EE_DATA,     .start = 0x64,  .end = 0x64,    .content.value = 0x00 }, // VOX Delay and other stuff, fixed value, required by WSJT-X
+        { .type = FT817EE_FUNC,     .start = 0x65,  .end = 0x65,    .content.funcPtr = CatDriver_Ft817_EEPROM_RW_Func }, // APO and Dig Mode setting, fixed value, required by WSJT-X
         { .type = FT817EE_FUNC,     .start = 0x79,  .end = 0x79,    .content.funcPtr = CatDriver_Ft817_EEPROM_RW_Func }, // VOX Delay and other stuff, fixed value, required by WSJT-X
         { .type = FT817EE_FUNC,     .start = 0x7A,  .end = 0x7A,    .content.funcPtr = CatDriver_Ft817_EEPROM_RW_Func }, // VOX Delay and other stuff, fixed value, required by WSJT-X
         { .type = FT817EE_DATA,     .start = 0x7B,  .end = 0x7B,    .content.value = 0x00 }, // Chg related, not supported
@@ -769,7 +782,7 @@ bool CatDriver_BlockRecv(uint8_t num, uint8_t idx, uint8_t rpt, uint8_t* buf, si
         {
             // we simply set the dial frequency here just for the show!
             ft817_memory_t* mem = (ft817_memory_t*)&buf[1];
-            df.tune_new = __builtin_bswap32(mem[0].freq) * (10 * TUNE_MULT);
+            df.tune_new = __builtin_bswap32(mem[0].freq) * 10;
         }
         retval = true;
     }
@@ -1022,7 +1035,7 @@ static void CatDriver_HandleCommands()
 
             if(ts.xlat == 0)
             {
-                fdelta = (ts.tx_audio_source == TX_AUDIO_DIGIQ)?AudioDriver_GetTranslateFreq()*4:0;
+                fdelta = (ts.tx_audio_source == TX_AUDIO_DIGIQ)?AudioDriver_GetTranslateFreq():0;
                 // If we are in DIGITAL IQ Output mode, use real tune frequency frequency instead
                 // translated RX frequency
             }
@@ -1037,7 +1050,7 @@ static void CatDriver_HandleCommands()
                 f *= 100;
                 f +=  (ft817.req[fidx] >> 4) * 10 + (ft817.req[fidx] & 0x0f);
             }
-            f *= TUNE_MULT*10;
+            f *= 10;
             df.tune_new = f - fdelta;
 
             resp[0] = 0;
@@ -1055,7 +1068,7 @@ static void CatDriver_HandleCommands()
 
             if(ts.xlat == 0)
             {
-                fdelta = (ts.tx_audio_source == TX_AUDIO_DIGIQ)?AudioDriver_GetTranslateFreq()*TUNE_MULT:0;
+                fdelta = (ts.tx_audio_source == TX_AUDIO_DIGIQ)?AudioDriver_GetTranslateFreq():0;
                 // If we are in DIGITAL IQ Output mode, send real tune frequency frequency instead
                 // translated RX frequency
             }
@@ -1064,7 +1077,7 @@ static void CatDriver_HandleCommands()
                 fdelta = 0;
             }
 
-            ulong f = (df.tune_new + fdelta  + (TUNE_MULT*10/2))/ (TUNE_MULT*10);
+            ulong f = (df.tune_new + fdelta  + 5)/ 10;
             ulong fbcd = 0;
             int fidx;
             for (fidx = 0; fidx < 8; fidx++)
@@ -1270,16 +1283,20 @@ static void CatDriver_HandleCommands()
             bc = 1;
             break;
         case FT817_PTT_STATE:
-            // FT-817 responds 0xFF if not TX and 0x00 if TX
-            // This differs from KA7OEI description but has been verified
-            // with the real thing.
-            resp[0]=ts.txrx_mode == TRX_MODE_TX?0x00:0xFF;
+        {
+            uint8_t tx_state = limit_4bits(roundf(swrm.fwd_pwr));
+            tx_state |= is_splitmode() ? 0x20 : 0x00;
+            tx_state |= ts.txrx_mode == TRX_MODE_TX ? 0x00 : 0x80;
+            tx_state |= swrm.vswr_dampened > 3.0 ? 0x40 : 0x00;
+
+            resp[0]= ts.txrx_mode == TRX_MODE_TX ? tx_state : 0x80;
             if(RadioManagement_IsTxDisabled())
             {
-                resp[0] =0xFF;
+                resp[0] = 0xFF;
             }
             bc = 1;
             break;
+        }
         case FT817_NOOP: /* FF sent out by HRD */
             break;
             // default:
@@ -1327,6 +1344,7 @@ void CatDriver_HandleProtocol()
             ft817.cloneout_state = CLONEOUT_INIT;
             ft817.clonein_state = CLONEIN_INIT;
             ft817.state = CAT_CAT;
+            /* fall through */  // this is for the compiler, the following comment is for Eclipse
             /* no break */
         case CAT_CAT:
             CatDriver_HandleCommands();

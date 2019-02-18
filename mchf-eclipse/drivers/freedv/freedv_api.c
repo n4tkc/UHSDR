@@ -1517,6 +1517,9 @@ static int freedv_comprx_700(struct freedv *f, COMP demod_in_8kHz[], int *valid)
                     break;
                 default:
                     assert(0);
+                    nspare = 0;
+                    // this is to silence the compiler
+                    // in case assert is not enabled.
                 }
 
                 for(k=0; k<nspare; k++)  {
@@ -1851,7 +1854,7 @@ int freedv_comprx(struct freedv *f, short speech_out[], COMP demod_in[]) {
     assert(f != NULL);
     int                 bits_per_codec_frame, bytes_per_codec_frame;
     int                 i, nout = 0;
-    int valid;
+    int valid = 0;
     
     assert(f->nin <= f->n_max_modem_samples);
 

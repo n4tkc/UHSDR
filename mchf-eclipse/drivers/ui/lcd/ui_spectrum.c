@@ -26,7 +26,7 @@
 #include "cw_decoder.h"
 #include "audio_nr.h"
 #include "psk.h"
-
+#include "uhsdr_math.h"
 /*
 #if defined(USE_DISP_480_320) || defined(USE_EXPERIMENTAL_MULTIRES)
 #define USE_DISP_480_320_SPEC
@@ -54,7 +54,7 @@ SpectrumAreas_t slayout;
  * @brief Implements the full calculation of coordinates for a variable sized spectrum display
  * This algorithm can also be used to calculate the layout statically offline (we don't do this yet).
  */
-void UiSpectrum_CalculateLayout(const bool is_big, const bool scope_enabled, const bool wfall_enabled, const UiArea_t* full_ptr, const uint16_t padding)
+void UiSpectrum_CalculateLayout(const bool is_big, const UiArea_t* full_ptr, const uint16_t padding)
 {
 	sd.Slayout=&slayout;
 
@@ -244,10 +244,11 @@ static void		UiSpectrum_CalculateDBm();
 static void UiSpectrum_UpdateSpectrumPixelParameters()
 {
     static uint16_t old_magnify = 0xFF;
-    static bool old_cw_lsb = false;
+    static bool old_lsb = false;
     static uint8_t old_dmod_mode = 0xFF;
     static uint8_t old_iq_freq_mode = 0xFF;
     static uint16_t old_cw_sidetone_freq = 0;
+    static uint16_t old_rtty_shift = 0;
     static uint8_t old_digital_mode = 0xFF;
 
     static bool force_update = true;
@@ -261,7 +262,7 @@ static void UiSpectrum_UpdateSpectrumPixelParameters()
 
     if (ts.iq_freq_mode != old_iq_freq_mode  || force_update)
     {
-        old_iq_freq_mode = ts.dmod_mode;
+        old_iq_freq_mode = ts.iq_freq_mode;
         force_update = true;
 
         if(!sd.magnify)     // is magnify mode on?
@@ -273,14 +274,17 @@ static void UiSpectrum_UpdateSpectrumPixelParameters()
             sd.rx_carrier_pos = slayout.scope.w/2 -0.5;                                // line is always in center in "magnify" mode
         }
     }
-    if (ts.cw_lsb != old_cw_lsb || ts.cw_sidetone_freq != old_cw_sidetone_freq || ts.dmod_mode != old_dmod_mode || ts.digital_mode != old_digital_mode || force_update)
+    bool cur_lsb = RadioManagement_LSBActive(ts.dmod_mode);
+
+    if (cur_lsb != old_lsb || ts.cw_sidetone_freq != old_cw_sidetone_freq || old_rtty_shift != rtty_ctrl_config.shift_idx || ts.dmod_mode != old_dmod_mode || ts.digital_mode != old_digital_mode || force_update)
     {
-        old_cw_lsb = ts.cw_lsb;
+        old_lsb = cur_lsb;
         old_cw_sidetone_freq = ts.cw_sidetone_freq;
         old_dmod_mode = ts.dmod_mode;
         old_digital_mode = ts.digital_mode;
+        old_rtty_shift = rtty_ctrl_config.shift_idx;
 
-        float32_t tx_vfo_offset = ((float32_t)(((int32_t)RadioManagement_GetTXDialFrequency() - (int32_t)RadioManagement_GetRXDialFrequency())/TUNE_MULT))/sd.hz_per_pixel;
+        float32_t tx_vfo_offset = ((float32_t)(((int32_t)RadioManagement_GetTXDialFrequency() - (int32_t)RadioManagement_GetRXDialFrequency())))/sd.hz_per_pixel;
 
         // FIXME: DOES NOT WORK PROPERLY IN SPLIT MODE
         sd.marker_num_prev = sd.marker_num;
@@ -319,7 +323,7 @@ static void UiSpectrum_UpdateSpectrumPixelParameters()
                 sd.marker_num = 1;
             }
 
-            for (uint16_t idx; idx < sd.marker_num; idx++)
+            for (uint16_t idx = 0; idx < sd.marker_num; idx++)
             {
                 mode_marker_offset[idx] = (ts.digi_lsb?-1.0:1.0)*(mode_marker[idx] / sd.hz_per_pixel);
             }
@@ -330,7 +334,7 @@ static void UiSpectrum_UpdateSpectrumPixelParameters()
             sd.marker_num = 1;
         }
 
-        for (uint16_t idx; idx < sd.marker_num; idx++)
+        for (uint16_t idx = 0; idx < sd.marker_num; idx++)
         {
             sd.marker_offset[idx] = tx_vfo_offset + mode_marker_offset[idx];
             sd.marker_pos[idx] = sd.rx_carrier_pos + sd.marker_offset[idx];
@@ -341,6 +345,7 @@ static void UiSpectrum_UpdateSpectrumPixelParameters()
         	sd.marker_pos[idx] = slayout.scope.w; // this is an invalid position out of screen
         }
 
+        force_update = false;
     }
 }
 
@@ -686,7 +691,7 @@ static void    UiSpectrum_DrawScope(uint16_t *old_pos, float32_t *fft_new)
     const uint16_t spec_height_limit = sd.scope_size - 1;
     const uint16_t spec_top_y = sd.scope_ystart + sd.scope_size;
 
-    uint32_t clr_scope, clr_scope_normal, clr_scope_fltr, clr_scope_fltrbg;
+    uint32_t clr_scope_normal, clr_scope_fltr, clr_scope_fltrbg;
     uint16_t clr_bg;
 
     //calculations of bandwidth highlight parameters and colours
@@ -736,9 +741,9 @@ static void    UiSpectrum_DrawScope(uint16_t *old_pos, float32_t *fft_new)
     		x_end=right_filter_border_pos;
     	}
 
-    	uint16_t xh;
-    	for(xh=x_start;xh<=x_end;xh++)
+    	for(uint16_t xh=x_start;xh<=x_end;xh++)
     	{
+    	    uint16_t clr_scope;
             if((xh>=left_filter_border_pos)&&(xh<=right_filter_border_pos)) //BW highlight control
             {
             	clr_scope=clr_scope_fltr;
@@ -816,7 +821,7 @@ static void    UiSpectrum_DrawScope(uint16_t *old_pos, float32_t *fft_new)
                             sd.marker_line_pos_prev[idx],
                             spec_top_y - spec_height_limit /* old = max pos */ ,
                             spec_top_y /* new = min pos */,
-                            clr_scope, clr_bg,	//TODO: add highlight color here
+                            clr_scope_normal, clr_bg,	//TODO: add highlight color here
                             false);
 
                     // we erase the memory for this location, so that it is fully redrawn
@@ -859,6 +864,8 @@ static void    UiSpectrum_DrawScope(uint16_t *old_pos, float32_t *fft_new)
     // we stop if there is a ptt_request and go straight out of the display update
     for(uint16_t x = slayout.scope.x, idx = 0; ts.ptt_req == false && idx < slayout.scope.w; x++, idx++)
     {
+        uint16_t clr_scope;
+
         if((x>=left_filter_border_pos)&&(x<=right_filter_border_pos)) //BW highlight control
         {
         	clr_scope=clr_scope_fltr;
@@ -970,6 +977,11 @@ static void UiSpectrum_InitSpectrumDisplayData()
     	sd.fft_iq_len = 1024;
     	sd.cfft_instance = &arm_cfft_sR_f32_len512;
     	break;
+    case RESOLUTION_800_480:	//FIXME: fill with correct values (move to layouts.c ??)
+    	sd.spec_len = 512;
+    	sd.fft_iq_len = 1024;
+    	sd.cfft_instance = &arm_cfft_sR_f32_len512;
+    	break;
     }
 
 
@@ -1031,7 +1043,7 @@ static void UiSpectrum_InitSpectrumDisplayData()
     // now make sure we fit in
     // please note, this works only if we have enough memory for have the lines
     // otherwise we will reduce size of displayed waterfall
-    if(sd.wfall_size * slayout.scope.w > sizeof(sd.waterfall))
+    if((sd.wfall_size * slayout.scope.w) > sizeof(sd.waterfall))
     {
         //sd.doubleWaterfallLine = 1;
 
@@ -1126,7 +1138,7 @@ static void UiSpectrum_DrawWaterfall()
     	sd.wfall_line++;        // bump to the next line in the circular buffer for next go-around
     }
 
-    uint16_t lptr = sd.wfall_line;      // get current line of "bottom" of waterfall in circular buffer
+    uint32_t lptr = sd.wfall_line;      // get current line of "bottom" of waterfall in circular buffer
 
     sd.wfall_line_update++;                                 // update waterfall line count
     sd.wfall_line_update %= ts.waterfall.vert_step_size;    // clip it to number of lines per iteration
@@ -1245,7 +1257,7 @@ static void UiSpectrum_DrawWaterfall()
 
 static float32_t  UiSpectrum_ScaleFFTValue(const float32_t value, float32_t* min_p)
 {
-    float32_t sig = sd.display_offset + log10f_fast(value) * sd.db_scale;     // take FFT data, do a log10 and multiply it to scale 10dB (fixed)
+    float32_t sig = sd.display_offset + Math_log10f_fast(value) * sd.db_scale;     // take FFT data, do a log10 and multiply it to scale 10dB (fixed)
     // apply "AGC", vertical "sliding" offset (or brightness for waterfall)
 
     if (sig < *min_p)
@@ -1355,12 +1367,9 @@ static void UiSpectrum_RedrawSpectrum()
         arm_copy_f32(&sd.FFT_RingBuffer[sd.samp_ptr],&sd.FFT_Samples[0],sd.fft_iq_len-sd.samp_ptr);
         arm_copy_f32(&sd.FFT_RingBuffer[0],&sd.FFT_Samples[sd.fft_iq_len-sd.samp_ptr],sd.samp_ptr);
         sd.reading_ringbuffer = false;
-        sd.state++;
-        break;
+        // Apply gain to collected IQ samples and then do FFT
+        // Scale input according to A/D gain and apply Window function
 
-    // Apply gain to collected IQ samples and then do FFT
-    case 1:		// Scale input according to A/D gain and apply Window function
-    {
     	//        UiSpectrum_FFTWindowFunction(ts.fft_window_type);		// do windowing function on input data to get less "Bin Leakage" on FFT data
         // fixed window type to Hann Window, because it provides excellent bin leakage behaviour AND
     	// it corresponds very well with the coefficients in the quadratic interpolation algorithm that is used
@@ -1369,14 +1378,13 @@ static void UiSpectrum_RedrawSpectrum()
 
         sd.state++;
         break;
-    }
-    case 2:		// Do FFT and calculate complex magnitude
+    case 1:		// Do FFT and calculate complex magnitude
     {
         arm_cfft_f32(sd.cfft_instance, sd.FFT_Samples,0,1);	// Do FFT
         sd.state++;
         break;
     }
-    case 3:
+    case 2:
     {
         // Calculate magnitude
         arm_cmplx_mag_f32( sd.FFT_Samples, sd.FFT_MagData ,sd.spec_len);
@@ -1384,33 +1392,33 @@ static void UiSpectrum_RedrawSpectrum()
 
         // just for debugging purposes
         // display the spectral noise reduction bin gain values in the second 64 pixels of the spectrum display
-        if((ts.dsp_active & DSP_NR_ENABLE) && NR.gain_display != 0)
+        if((is_dsp_nr()) && ts.nr_gain_display != 0)
         {
-        	if(NR.gain_display == 1)
+        	if(ts.nr_gain_display == 1)
         	{
-        	for(int bindx = 0; bindx < ts.NR_FFT_L / 2; bindx++)
+        	for(int bindx = 0; bindx < nr_params.NR_FFT_L / 2; bindx++)
         	{
-        		sd.FFT_MagData[(ts.NR_FFT_L / 2 - 1) - bindx] = NR.Hk[bindx] * 150.0;
+        		sd.FFT_MagData[(nr_params.NR_FFT_L / 2 - 1) - bindx] = NR2.Hk[bindx] * 150.0;
         	}
         	}
         	/*        	else
-        	if(NR.gain_display == 2)
+        	if(ts.nr_gain_display == 2)
         	{
-            	for(int bindx = 0; bindx < ts.NR_FFT_L / 2; bindx++)
+            	for(int bindx = 0; bindx < nr_params.NR_FFT_L / 2; bindx++)
             	{
-            		sd.FFT_MagData[(ts.NR_FFT_L / 2 - 1) - bindx] = NR2.long_tone_gain[bindx] * 150.0;
+            		sd.FFT_MagData[(nr_params.NR_FFT_L / 2 - 1) - bindx] = NR2.long_tone_gain[bindx] * 150.0;
             	}
         	}
         	else
-        	if(NR.gain_display == 3)
+        	if(ts.nr_gain_display == 3)
         	{
-            	for(int bindx = 0; bindx < ts.NR_FFT_L / 2; bindx++)
+            	for(int bindx = 0; bindx < nr_params.NR_FFT_L / 2; bindx++)
             	{
-            		sd.FFT_MagData[(ts.NR_FFT_L / 2 - 1) - bindx] = NR.Hk[bindx] * NR2.long_tone_gain[bindx] * 150.0;
+            		sd.FFT_MagData[(nr_params.NR_FFT_L / 2 - 1) - bindx] = NR.Hk[bindx] * NR2.long_tone_gain[bindx] * 150.0;
             	}
         	} */
         	// set all other pixels to a low value
-        	for(int bindx = ts.NR_FFT_L / 2; bindx < sd.spec_len; bindx++)
+        	for(int bindx = nr_params.NR_FFT_L / 2; bindx < sd.spec_len; bindx++)
         	{
         		sd.FFT_MagData[bindx] = 10.0;
         	}
@@ -1421,7 +1429,7 @@ static void UiSpectrum_RedrawSpectrum()
     }
 
     //  Low-pass filter amplitude magnitude data
-    case 4:
+    case 3:
     {
     	float32_t filt_factor = 1/(float)ts.spectrum_filter;		// use stored filter setting inverted to allow multiplication
         arm_scale_f32(sd.FFT_AVGData, filt_factor, sd.FFT_Samples, sd.spec_len);	// get scaled version of previous data
@@ -1457,7 +1465,7 @@ static void UiSpectrum_RedrawSpectrum()
     }
 
     // De-linearize and normalize display data and do AGC processing
-    case 5:
+    case 4:
     	if (is_RedrawActive)		//this is needed for overwrite prevention if menu was drawn when sd.state>4
     	{
     		float32_t	min1=100000;
@@ -1479,7 +1487,7 @@ static void UiSpectrum_RedrawSpectrum()
     	sd.state++;
     	break;
 
-    case 6:	// rescale waterfall horizontally, apply brightness/contrast, process pallate and put vertical line on screen, if enabled.
+    case 5:	// rescale waterfall horizontally, apply brightness/contrast, process pallate and put vertical line on screen, if enabled.
     	if (is_RedrawActive)		//this is needed for overwrite prevention if menu was drawn when sd.state>4
     	{
     		if(sd.RedrawType&Redraw_SCOPE)
@@ -1553,7 +1561,7 @@ void UiSpectrum_Init()
 #endif
     }
   */
-    UiSpectrum_CalculateLayout(ts.spectrum_size == SPECTRUM_BIG, is_scopemode(), is_waterfallmode(), &ts.Layout->SpectrumWindow, ts.Layout->SpectrumWindowPadding);
+    UiSpectrum_CalculateLayout(ts.spectrum_size == SPECTRUM_BIG, &ts.Layout->SpectrumWindow, ts.Layout->SpectrumWindowPadding);
     UiSpectrum_InitSpectrumDisplayData();
     UiSpectrum_Clear();         // clear display under spectrum scope
     UiSpectrum_CreateDrawArea();
@@ -1653,7 +1661,7 @@ static void UiSpectrum_DrawFrequencyBar()
         uint32_t  clr;
         UiMenu_MapColors(ts.spectrum_freqscale_colour,NULL, &clr);
 
-        float32_t freq_calc = (RadioManagement_GetRXDialFrequency() + (ts.dmod_mode == DEMOD_CW?RadioManagement_GetCWDialOffset():0))/TUNE_MULT;      // get current tune frequency in Hz
+        float32_t freq_calc = RadioManagement_GetRXDialFrequency() + (ts.dmod_mode == DEMOD_CW ? RadioManagement_GetCWDialOffset() : 0 );      // get current tune frequency in Hz
 
         if (sd.magnify == 0)
         {
@@ -1770,50 +1778,6 @@ void UiSpectrum_Redraw()
     }
 }
 
-static void UiSpectrum_DisplayDbm()
-{
-    // TODO: Move to UI Driver
-    bool display_something = false;
-    static long oldVal=99999;
-    static uint8_t dBmShown=0;
-    if( ts.txrx_mode == TRX_MODE_RX)
-    {
-        long val;
-        const char* unit_label;
-
-        switch(ts.display_dbm)
-        {
-        case DISPLAY_S_METER_DBM:
-            display_something = true;
-            val = sm.dbm;
-            unit_label = "dBm   ";
-            break;
-        case DISPLAY_S_METER_DBMHZ:
-            display_something = true;
-            val = sm.dbmhz;
-            unit_label = "dBm/Hz";
-            break;
-        }
-
-        if ((display_something == true) && (val!=oldVal))
-        {
-            char txt[12];
-            snprintf(txt,12,"%4ld      ", val);
-            UiLcdHy28_PrintText(ts.Layout->DisplayDbm.x,ts.Layout->DisplayDbm.y,txt,White,Blue,0);
-            UiLcdHy28_PrintText(ts.Layout->DisplayDbm.x+SMALL_FONT_WIDTH * 4,ts.Layout->DisplayDbm.y,unit_label,White,Blue,4);
-            oldVal=val;		//this will prevent from useless redrawing the same
-            dBmShown=1;		//for indicate that dms are shown and erase function may it clear when needed
-        }
-    }
-
-    // clear the display since we are not showing dBm or dBm/Hz or we are in TX mode
-    if ((display_something == false) && (dBmShown==1))
-    {
-        UiLcdHy28_DrawFullRect(ts.Layout->DisplayDbm.x, ts.Layout->DisplayDbm.y, 15, SMALL_FONT_WIDTH * 10 , Black);
-        dBmShown=0;		//just to indicate that dbm is erased
-        oldVal=99999;	//some value that will enforce refresh when user enable display dbm
-    }
-}
 
 
 
@@ -1924,28 +1888,28 @@ void UiSpectrum_CalculateSnap(float32_t Lbin, float32_t Ubin, int posbin, float3
 		// in the CW decoder section
 		// OR if we are in AM/SAM/Digi BPSK mode
 	{
-		static float32_t freq_old = 10000000.0;
-	float32_t help_freq = (float32_t)df.tune_old / ((float32_t)TUNE_MULT);
-	// 1. lowpass filter all the relevant bins over 2 to 20 FFTs (?)
-	// lowpass filtering already exists in the spectrum/waterfall display driver
+	    static float32_t freq_old = 10000000.0;
+	    float32_t help_freq = df.tune_old;
+	    // 1. lowpass filter all the relevant bins over 2 to 20 FFTs (?)
+	    // lowpass filtering already exists in the spectrum/waterfall display driver
 
-// 2. determine bin with maximum value inside these samples
+	    // 2. determine bin with maximum value inside these samples
 
-    // look for maximum value and save the bin # for frequency delta calculation
-    float32_t maximum = 0.0;
-    float32_t maxbin = 1.0;
-    float32_t delta1 = 0.0;
-    float32_t delta2 = 0.0;
-    float32_t delta = 0.0;
+	    // look for maximum value and save the bin # for frequency delta calculation
+	    float32_t maximum = 0.0;
+	    float32_t maxbin = 1.0;
+	    float32_t delta1 = 0.0;
+	    float32_t delta2 = 0.0;
+	    float32_t delta = 0.0;
 
-    for (int c = (int)Lbin; c <= (int)Ubin; c++)   // search for FFT bin with highest value = carrier and save the no. of the bin in maxbin
-    {
-        if (maximum < sd.FFT_Samples[c])
-        {
-            maximum = sd.FFT_Samples[c];
-            maxbin = c;
-        }
-    }
+	    for (int c = (int)Lbin; c <= (int)Ubin; c++)   // search for FFT bin with highest value = carrier and save the no. of the bin in maxbin
+	    {
+	        if (maximum < sd.FFT_Samples[c])
+	        {
+	            maximum = sd.FFT_Samples[c];
+	            maxbin = c;
+	        }
+	    }
 
 // 3. first frequency carrier offset calculation
     // ok, we have found the maximum, now save first delta frequency
@@ -1995,7 +1959,6 @@ void UiSpectrum_CalculateSnap(float32_t Lbin, float32_t Ubin, int posbin, float3
     help_freq = help_freq + delta;
     // do we need a lowpass filter?
     help_freq = 0.2 * help_freq + 0.8 * freq_old;
-    //help_freq = help_freq * ((float32_t)TUNE_MULT);
     ads.snap_carrier_freq = (ulong) (help_freq);
     freq_old = help_freq;
 
@@ -2012,7 +1975,7 @@ void UiSpectrum_CalculateSnap(float32_t Lbin, float32_t Ubin, int posbin, float3
     	{
     		// tune to frequency
             // set frequency of Si570 with 4 * dialfrequency
-            df.tune_new = (help_freq * ((float32_t)TUNE_MULT));
+            df.tune_new = help_freq;
     		// reset counter
     		snap_counter = 0;
     		sc.snap = false;
@@ -2024,19 +1987,8 @@ void UiSpectrum_CalculateSnap(float32_t Lbin, float32_t Ubin, int posbin, float3
 	}
 }
 
-
 static void UiSpectrum_CalculateDBm()
 {
-    // Variables for dbm display --> void calculate_dBm
-    static float32_t m_AttackAvedbm = 0.0;
-    static float32_t m_DecayAvedbm = 0.0;
-    static float32_t m_AverageMagdbm = 0.0;
-    static float32_t m_AttackAvedbmhz = 0.0;
-    static float32_t m_DecayAvedbmhz = 0.0;
-    static float32_t m_AverageMagdbmhz = 0.0;
-    // ALPHA = 1 - e^(-T/Tau)
-    static float32_t m_AttackAlpha = 0.5; //0.8647;
-    static float32_t m_DecayAlpha  = 0.05; //0.3297;
 
     //###########################################################################################################################################
     //###########################################################################################################################################
@@ -2046,190 +1998,127 @@ static void UiSpectrum_CalculateDBm()
     // so the additional processor load and additional RAM usage should be close to zero
     // this code also calculates the basis for the S-Meter (in sm.dbm and sm.dbmhz)
     //
+    if( ts.txrx_mode == TRX_MODE_RX)
     {
-        if( ts.txrx_mode == TRX_MODE_RX)
+        const float32_t slope = 19.8; // 19.6; --> empirical values derived from measurements by DL8MBY, 2016/06/30, Thanks!
+        const float32_t cons = ts.dbm_constant - 225 - (sd.fft_iq_len == 1024?3:0);
+        // the last term is for correcting the dbm value when a twice as large fft is being used (512 vs. 256)
+        const int buff_len_int = sd.fft_iq_len;
+        const float32_t buff_len = buff_len_int;
+
+        // width of a 256 tap FFT bin = 187.5Hz
+        // we have to take into account the magnify mode
+        // --> recalculation of bin_BW
+        // correct bin bandwidth is determined by the Zoom FFT display setting
+        const float32_t bin_BW = IQ_SAMPLE_RATE_F * 2.0 / (buff_len * (1 << sd.magnify)) ;
+
+        float32_t width = FilterInfo[ts.filters_p->id].width;
+        float32_t offset = ts.filters_p->offset;
+
+        if (offset == 0)
         {
-            const float32_t slope = 19.8; // 19.6; --> empirical values derived from measurements by DL8MBY, 2016/06/30, Thanks!
-            const float32_t cons = ts.dbm_constant - 225 - (sd.fft_iq_len == 1024?3:0);
-            // the last term is for correcting the dbm value when a twice as large fft is being used (512 vs. 256)
-            const int buff_len_int = sd.fft_iq_len;
-            const float32_t buff_len = buff_len_int;
-
-            // width of a 256 tap FFT bin = 187.5Hz
-            // we have to take into account the magnify mode
-            // --> recalculation of bin_BW
-            // correct bin bandwidth is determined by the Zoom FFT display setting
-            const float32_t bin_BW = IQ_SAMPLE_RATE_F * 2.0 / (buff_len * (1 << sd.magnify)) ;
-
-            float32_t width = FilterInfo[FilterPathInfo[ts.filter_path].id].width;
-            float32_t offset = FilterPathInfo[ts.filter_path].offset;
-
-            if (offset == 0)
-            {
-                offset = width/2;
-            }
-
-            float32_t lf_freq = offset - width/2;
-            float32_t uf_freq = offset + width/2;
-
-            //	determine Lbin and Ubin from ts.dmod_mode and FilterInfo.width
-            //	= determine bandwith separately for lower and upper sideband
-
-            float32_t bw_LOWER = 0.0;
-            float32_t bw_UPPER = 0.0;
-
-            if (RadioManagement_UsesBothSidebands(ts.dmod_mode) == true)
-            {
-                bw_UPPER = uf_freq;
-                bw_LOWER = -uf_freq;
-            }
-            else if (RadioManagement_LSBActive(ts.dmod_mode) == true)
-            {
-                bw_UPPER = -lf_freq;
-                bw_LOWER = -uf_freq;
-            }
-            else if (ts.dmod_mode == DEMOD_DIGI && ts.digital_mode == DigitalMode_BPSK)
-            { // this is for experimental SNAP of BPSK carriers
-            	bw_LOWER = PSK_OFFSET - PSK_SNAP_RANGE;
-            	bw_UPPER = PSK_OFFSET + PSK_SNAP_RANGE;
-            }
-            else // USB
-            {
-                bw_UPPER = uf_freq;
-                bw_LOWER = lf_freq;
-            }
-
-
-            //  determine posbin (where we receive at the moment) from ts.iq_freq_mode
-
-            // frequency translation off, IF = 0 Hz OR
-            // in all magnify cases (2x up to 32x) the posbin is in the centre of the spectrum display
-
-            int bin_offset = 0;
-
-
-            if(sd.magnify == 0)
-            {
-                if(ts.iq_freq_mode == FREQ_IQ_CONV_P6KHZ)       // we are in RF LO HIGH mode (tuning is below center of screen)
-                {
-                    bin_offset = - (buff_len_int / 16);
-                }
-                else if(ts.iq_freq_mode == FREQ_IQ_CONV_M6KHZ)      // we are in RF LO LOW mode (tuning is above center of screen)
-                {
-                    bin_offset = (buff_len_int / 16);
-                }
-                else if(ts.iq_freq_mode == FREQ_IQ_CONV_P12KHZ)     // we are in RF LO HIGH mode (tuning is below center of screen)
-                {
-                    bin_offset =  - (buff_len_int / 8);
-                }
-                else if(ts.iq_freq_mode == FREQ_IQ_CONV_M12KHZ)     // we are in RF LO LOW mode (tuning is above center of screen)
-                {
-                    bin_offset =  (buff_len_int / 8);
-                }
-            }
-
-            int posbin = buff_len_int / 4 + bin_offset;  // right in the middle!
-
-
-            // calculate upper and lower limit for determination of signal strength
-            // = filter passband is between the lower bin Lbin and the upper bin Ubin
-            float32_t Lbin = (float32_t)posbin + roundf(bw_LOWER / bin_BW);
-            float32_t Ubin = (float32_t)posbin + roundf(bw_UPPER / bin_BW); // the bin on the upper sideband side
-
-            if(ts.dmod_mode == DEMOD_SAM && ads.sam_sideband == SAM_SIDEBAND_USB) // workaround to make SNAP and carrier offaet display work with sideband-selected SAM
-            {
-            	Lbin = Lbin - 1.0;
-            }
-
-            // take care of filter bandwidths that are larger than the displayed FFT bins
-            if(Lbin < 0)
-            {
-                Lbin = 0;
-            }
-            //if (Ubin > 255)
-            if (Ubin > (sd.spec_len-1))
-            {
-                //Ubin = 255;
-            	Ubin = sd.spec_len-1;
-            }
-
-            for(int32_t i = 0; i < (buff_len_int/4); i++)
-            {
-                sd.FFT_Samples[sd.spec_len - i - 1] = sd.FFT_MagData[i + buff_len_int/4] * SCOPE_PREAMP_GAIN;	// get data
-            }
-            for(int32_t i = buff_len_int/4; i < (buff_len_int/2); i++)
-            {
-                sd.FFT_Samples[sd.spec_len - i - 1] = sd.FFT_MagData[i - buff_len_int/4] * SCOPE_PREAMP_GAIN;	// get data
-            }
-
-            // here would be the right place to start with the SNAP mode!
-            if(cw_decoder_config.snap_enable && (ts.dmod_mode == DEMOD_CW || ts.dmod_mode == DEMOD_AM || ts.dmod_mode == DEMOD_SAM || (ts.dmod_mode == DEMOD_DIGI && ts.digital_mode == DigitalMode_BPSK)))
-            {
-            	 UiSpectrum_CalculateSnap(Lbin, Ubin, posbin, bin_BW);
-
-            }
-
-            float32_t sum_db = 0.0;
-            // determine the sum of all the bin values in the passband
-            for (int c = (int)Lbin; c <= (int)Ubin; c++)   // sum up all the values of all the bins in the passband
-            {
-                sum_db = sum_db + sd.FFT_Samples[c]; // / (float32_t)(1<<sd.magnify);
-            }
-            // we have to account for the larger number of bins that are summed up when using higher
-            // magnifications
-            // for example: if we have 34 bins to sum up for sd.magnify == 1, we sum up 68 bins for sd.magnify == 2
-
-            //            sum_db /= (float32_t)sd.magnify + 1;
-            //            cons = cons - 3.0 * (sd.magnify);
-
-            if (sum_db > 0)
-            {
-                sm.dbm = slope * log10f_fast (sum_db) + cons;
-                sm.dbmhz = sm.dbm -  10 * log10f_fast ((float32_t)(((int)Ubin-(int)Lbin) * bin_BW)) ;
-            }
-            else
-            {
-                sm.dbm = -145.0;
-                sm.dbmhz = -145.0;
-            }
-
-            // lowpass IIR filter
-            // Wheatley 2011: two averagers with two time constants
-            // IIR filter with one element analog to 1st order RC filter
-            // but uses two different time constants (ALPHA = 1 - e^(-T/Tau)) depending on
-            // whether the signal is increasing (attack) or decreasing (decay)
-            //
-            m_AttackAvedbm = (1.0 - m_AttackAlpha) * m_AttackAvedbm + m_AttackAlpha * sm.dbm;
-            m_DecayAvedbm = (1.0 - m_DecayAlpha) * m_DecayAvedbm + m_DecayAlpha * sm.dbm;
-            m_AttackAvedbmhz = (1.0 - m_AttackAlpha) * m_AttackAvedbmhz + m_AttackAlpha * sm.dbmhz;
-            m_DecayAvedbmhz = (1.0 - m_DecayAlpha) * m_DecayAvedbmhz + m_DecayAlpha * sm.dbmhz;
-
-            if (m_AttackAvedbm > m_DecayAvedbm)
-            { // if attack average is larger then it must be an increasing signal
-                m_AverageMagdbm = m_AttackAvedbm; // use attack average value for output
-                m_DecayAvedbm = m_AttackAvedbm; // set decay average to attack average value for next time
-            }
-            else
-            { // signal is decreasing, so use decay average value
-                m_AverageMagdbm = m_DecayAvedbm;
-            }
-
-            if (m_AttackAvedbmhz > m_DecayAvedbmhz)
-            { // if attack average is larger then it must be an increasing signal
-                m_AverageMagdbmhz = m_AttackAvedbmhz; // use attack average value for output
-                m_DecayAvedbmhz = m_AttackAvedbmhz; // set decay average to attack average value for next time
-            }
-            else
-            { // signal is decreasing, so use decay average value
-                m_AverageMagdbmhz = m_DecayAvedbmhz;
-            }
-
-            //        long dbm_Hz = (long) m_AverageMag;
-            sm.dbm = m_AverageMagdbm; // write average into variable for S-meter display
-            sm.dbmhz = m_AverageMagdbmhz; // write average into variable for S-meter display
+            offset = width/2;
         }
 
-        UiSpectrum_DisplayDbm();
+        const float32_t lf_freq = offset - width/2;
+        const float32_t uf_freq = offset + width/2;
+
+        //	determine Lbin and Ubin from ts.dmod_mode and FilterInfo.width
+        //	= determine bandwith separately for lower and upper sideband
+
+        float32_t bw_LOWER = 0.0;
+        float32_t bw_UPPER = 0.0;
+
+        if (RadioManagement_UsesBothSidebands(ts.dmod_mode) == true)
+        {
+            bw_UPPER = uf_freq;
+            bw_LOWER = -uf_freq;
+        }
+        else if (RadioManagement_LSBActive(ts.dmod_mode) == true)
+        {
+            bw_UPPER = -lf_freq;
+            bw_LOWER = -uf_freq;
+        }
+        else if (is_demod_psk())
+        { // this is for experimental SNAP of BPSK carriers
+            bw_LOWER = PSK_OFFSET - PSK_SNAP_RANGE;
+            bw_UPPER = PSK_OFFSET + PSK_SNAP_RANGE;
+        }
+        else // USB
+        {
+            bw_UPPER = uf_freq;
+            bw_LOWER = lf_freq;
+        }
+
+
+        //  determine posbin (where we receive at the moment) from ts.iq_freq_mode
+
+        // frequency translation off, IF = 0 Hz OR
+        // in all magnify cases (2x up to 32x) the posbin is in the centre of the spectrum display
+
+        const int32_t bin_offset = sd.magnify != 0 ? 0 : (- (buff_len_int * AudioDriver_GetTranslateFreq( )) / (2 * IQ_SAMPLE_RATE));
+        const int32_t posbin = buff_len_int / 4 + bin_offset;  // right in the middle!
+
+
+        // calculate upper and lower limit for determination of signal strength
+        // = filter passband is between the lower bin Lbin and the upper bin Ubin
+        float32_t Lbin = (float32_t)posbin + roundf(bw_LOWER / bin_BW);
+        float32_t Ubin = (float32_t)posbin + roundf(bw_UPPER / bin_BW); // the bin on the upper sideband side
+
+        if(ts.dmod_mode == DEMOD_SAM && ads.sam_sideband == SAM_SIDEBAND_USB) // workaround to make SNAP and carrier offset display work with sideband-selected SAM
+        {
+            Lbin = Lbin - 1.0;
+        }
+
+        // take care of filter bandwidths that are larger than the displayed FFT bins
+        if(Lbin < 0)
+        {
+            Lbin = 0;
+        }
+
+        if (Ubin > (sd.spec_len-1))
+        {
+            Ubin = sd.spec_len-1;
+        }
+
+        for(int32_t i = 0; i < (buff_len_int/4); i++)
+        {
+            sd.FFT_Samples[sd.spec_len - i - 1] = sd.FFT_MagData[i + buff_len_int/4] * SCOPE_PREAMP_GAIN;	// get data
+        }
+        for(int32_t i = buff_len_int/4; i < (buff_len_int/2); i++)
+        {
+            sd.FFT_Samples[sd.spec_len - i - 1] = sd.FFT_MagData[i - buff_len_int/4] * SCOPE_PREAMP_GAIN;	// get data
+        }
+
+        // here would be the right place to start with the SNAP mode!
+        if(cw_decoder_config.snap_enable && (ts.dmod_mode == DEMOD_CW || ts.dmod_mode == DEMOD_AM || ts.dmod_mode == DEMOD_SAM || (ts.dmod_mode == DEMOD_DIGI && ts.digital_mode == DigitalMode_BPSK)))
+        {
+            UiSpectrum_CalculateSnap(Lbin, Ubin, posbin, bin_BW);
+        }
+
+        float32_t sum_db = 0.0;
+        // determine the sum of all the bin values in the passband
+        for (int c = Lbin; c <= (int)Ubin; c++)   // sum up all the values of all the bins in the passband
+        {
+            sum_db = sum_db + sd.FFT_Samples[c]; // / (float32_t)(1<<sd.magnify);
+        }
+        // we have to account for the larger number of bins that are summed up when using higher
+        // magnifications
+        // for example: if we have 34 bins to sum up for sd.magnify == 1, we sum up 68 bins for sd.magnify == 2
+
+        //            sum_db /= (float32_t)sd.magnify + 1;
+        //            cons = cons - 3.0 * (sd.magnify);
+
+        if (sum_db > 0)
+        {
+            sm.dbm_cur = slope * Math_log10f_fast (sum_db) + cons;
+            sm.dbmhz_cur = sm.dbm_cur -  10 * Math_log10f_fast ((float32_t)(((int)Ubin-(int)Lbin) * bin_BW)) ;
+        }
+        else
+        {
+            sm.dbm_cur = -145.0;
+            sm.dbmhz_cur = -145.0;
+        }
     }
 }
 /*

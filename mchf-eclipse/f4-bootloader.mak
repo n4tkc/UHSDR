@@ -1,6 +1,7 @@
 # IMPORTANT: Keep startup_stm32f407xx.S the first entry, otherwise build will not work with gcc 7, see github issue #1416
 BL_HAL_SRC := \
 basesw/mcHF/Src/startup_stm32f407xx.S \
+basesw/mcHF/Src/system_stm32f4xx.c \
 basesw/mcHF/Src/adc.c \
 basesw/mcHF/Src/dac.c \
 basesw/mcHF/Src/dma.c \
@@ -29,16 +30,9 @@ basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Core/Src/usbh_core.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Core/Src/usbh_ctlreq.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Core/Src/usbh_ioreq.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Core/Src/usbh_pipes.c \
-basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/MTP/Src/usbh_mtp.c \
-basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/MTP/Src/usbh_mtp_ptp.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Src/usbh_msc.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Src/usbh_msc_bot.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Src/usbh_msc_scsi.c \
-basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid.c \
-basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid_keybd.c \
-basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid_mouse.c \
-basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid_parser.c \
-basesw/mcHF/Middlewares/ST/STM32_USB_Host_Library/Class/CDC/Src/usbh_cdc.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c \
 basesw/mcHF/Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c \
@@ -109,5 +103,4 @@ basesw/mcHF/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_fmc.c \
 basesw/mcHF/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_fsmc.c \
 basesw/mcHF/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_sdmmc.c \
 basesw/mcHF/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_usb.c \
-basesw/mcHF/Src/system_stm32f4xx.c \
 \

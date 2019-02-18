@@ -93,7 +93,7 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 #ifdef BOOTLOADER_BUILD
-  mchfBl_CheckAndGoForDfuBoot();
+    Bootloader_CheckAndGoForBootTarget();
   //  we need to do this as early as possible
 #endif
   /* USER CODE END 1 */
@@ -111,7 +111,7 @@ int main(void)
   /* Initialize all configured peripherals */
 
 #ifdef BOOTLOADER_BUILD
-  bootloader_main();
+  Bootloader_Main();
 #else
   MX_GPIO_Init();
   MX_DMA_Init();
@@ -152,7 +152,7 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-    BL_Application();
+    Bootloader_UsbHostApplication();
 
   }
 #endif
@@ -262,6 +262,7 @@ void assert_failed(uint8_t* file, uint32_t line)
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+    for(;;); // We stuck here as long as we do not have any debug interface...
   /* USER CODE END 6 */
 
 }

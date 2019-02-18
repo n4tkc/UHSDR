@@ -1,6 +1,7 @@
 # IMPORTANT: Keep startup_stm32f767xx.S the first entry, otherwise build will not work with gcc 7, see github issue #1416
 HAL_SRC := \
 basesw/ovi40/Src/startup_stm32f767xx.S \
+basesw/ovi40/Src/system_stm32f7xx.c \
 basesw/ovi40/Src/adc.c \
 basesw/ovi40/Src/dac.c \
 basesw/ovi40/Src/dma.c \
@@ -32,10 +33,6 @@ basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Core/Src/usbh_pipes.c \
 basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Src/usbh_msc.c \
 basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Src/usbh_msc_bot.c \
 basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Src/usbh_msc_scsi.c \
-basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid.c \
-basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid_keybd.c \
-basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid_mouse.c \
-basesw/ovi40/Middlewares/ST/STM32_USB_Host_Library/Class/HID/Src/usbh_hid_parser.c \
 basesw/ovi40/Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c \
 basesw/ovi40/Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c \
 basesw/ovi40/Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c \
@@ -123,7 +120,6 @@ basesw/ovi40/Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_tim.c \
 basesw/ovi40/Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_usart.c \
 basesw/ovi40/Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_usb.c \
 basesw/ovi40/Drivers/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_utils.c \
-basesw/ovi40/Src/system_stm32f7xx.c \
 
 DSPLIB_SRC:=\
 basesw/ovi40/Drivers/CMSIS/DSP_Lib/Source/TransformFunctions/arm_bitreversal2.S \

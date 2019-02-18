@@ -16,8 +16,9 @@
 #define __MCHF_H
 
 /* Includes ------------------------------------------------------------------*/
-#include "uhsdr_mcu.h"
 #include "uhsdr_board_config.h"
+#include "uhsdr_board.h"
+#include "gpio.h"
 
 typedef enum
 {
@@ -90,12 +91,12 @@ void mcHF_PowerOff();
 /*
  * Just toggles the PowerHold Pin, but does not stop execution
  */
-static inline void mcHF_PowerHoldOff()
+static inline void Bootloader_PowerHoldOff()
 {
     mchfBl_PinOn(PWR_HOLD);
 }
 
-static inline void mcHF_PowerHoldOn()
+static inline void Bootloader_PowerHoldOn()
 {
     mchfBl_PinOff(PWR_HOLD);
 }

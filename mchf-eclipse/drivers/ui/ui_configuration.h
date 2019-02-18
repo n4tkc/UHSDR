@@ -19,14 +19,17 @@
 
 enum
 {
-    ConfigEntry_Stop,
+    ConfigEntry_Stop = 0,
     ConfigEntry_UInt8,
     ConfigEntry_UInt16,
     ConfigEntry_UInt32_16,
     ConfigEntry_Int32_16,
     ConfigEntry_Int16,
 	ConfigEntry_Int32,			//this type saves and reads two subsequent 16bit words
+	ConfigEntry_UInt8x2,      // this type saves and reads two indepent 8 bit values stored in a 16bit structure. This is relevant for defaults, which are independent
 //  ConfigEntry_Bool,
+	Calib_Val = 0x10000000,     // if this is "or"ed with a normal ConfigEntry_... value, it indicates this parameter is a hardware calibration parameter.
+	ConfigEntry_TypeMask = 0x0000ffff, // we support 2^16 different types, this is plenty.
 };
 
 typedef struct
@@ -37,13 +40,13 @@ typedef struct
     int32_t val_default;
     int32_t val_min;
     int32_t val_max;
-    uint16_t item_count; // 0 or 1 indicates single value; higher values indicate arrays
-    uint16_t  item_data_spacing; // only used for 32bit values; indicates the distance of the higher 16 bits from the lower 16bits
+    // uint16_t item_count; // 0 or 1 indicates single value; higher values indicate arrays
+    // uint16_t  item_data_spacing; // only used for 32bit values; indicates the distance of the higher 16 bits from the lower 16bits
 } ConfigEntryDescriptor;
 
 const ConfigEntryDescriptor* UiConfiguration_GetEntry(uint16_t id);
 
-void        UiConfiguration_LoadEepromValues(void);
+void        UiConfiguration_LoadEepromValues(bool load_freq_mode_defaults, bool load_eeprom_defaults);
 uint16_t    UiConfiguration_SaveEepromValues(void);
 void		UiConfiguration_UpdateMacroCap(void);
 
@@ -61,14 +64,9 @@ void		UiConfiguration_UpdateMacroCap(void);
 //
 #define USB_FREQ_THRESHOLD  (10000000)    // dial frequency at and above which the default is USB, Hz
 //
-#define MAX_RF_ATTEN        15      // Maximum setting for RF attenuation
 //
 #define MIN_RIT_VALUE       -60     // Minimum RIT Value -1.2 kHz
 #define MAX_RIT_VALUE       60      // Maximum RIT Value +1.2 kHz
-//
-#define MAX_RF_GAIN         50      // Maximum RF gain setting
-#define DEFAULT_RF_GAIN     50      // Default RF gain setting
-
 
 #define LINEOUT_GAIN_DEFAULT    0x49    // Default lineout gain setting in dB steps
 #define LINEOUT_GAIN_MIN        1       //  min lineout gain setting in dB steps
@@ -330,8 +328,8 @@ void		UiConfiguration_UpdateMacroCap(void);
 //
 #define EEPROM_SPECTRUM_MAGNIFY				149     // TRUE if spectrum scope is to be magnified
 //
-#define EEPROM_WIDE_FILT_CW_DISABLE			150     // TRUE if wide filters are to be disabled in CW mode
-#define EEPROM_NARROW_FILT_SSB_DISABLE		151     // TRUE if narrow filters are to be disabled in SSB mode
+//#define EEPROM_WIDE_FILT_CW_DISABLE			150     // TRUE if wide filters are to be disabled in CW mode
+//#define EEPROM_NARROW_FILT_SSB_DISABLE		151     // TRUE if narrow filters are to be disabled in SSB mode
 //
 #define EEPROM_AM_MODE_DISABLE				152     // TRUE if AM mode is to be disabled
 //
@@ -368,12 +366,12 @@ void		UiConfiguration_UpdateMacroCap(void);
 //
 #define EEPROM_TX_DISABLE					169     // TRUE of transmit is to be disabled
 #define EEPROM_FLAGS1						170     // Miscellaneous status flag, saved in EEPROM - see variable "flags1"
-#define EEPROM_VERSION_NUMBER				171     // Storage of current version release - used to detect change of firmware
+#define EEPROM_VERSION_RELEASE				171     // Storage of current version release - used to detect change of firmware
 #define EEPROM_NB_AGC_TIME_CONST			172     // Noise blanker AGC time constant setting
 #define EEPROM_CW_OFFSET_MODE				173     // CW Offset mode
 #define EEPROM_FREQ_CONV_MODE				174     // Frequency Conversion Mode (e.g. I/Q frequency conversion done in receive/transmit to offset from zero)
 #define EEPROM_LSB_USB_AUTO_SELECT			175     // Auto selection of LSB/USB above/below 10 MHz (including 60 meters)
-#define EEPROM_VERSION_BUILD				176     // Storage of current version build number - used to detect change of firmware
+#define EEPROM_VERSION_MAJOR				176     // Storage of current version build number - used to detect change of firmware
 #define EEPROM_LCD_BLANKING_CONFIG			177     // Configuration of automatic LCD blanking mode settings
 #define EEPROM_VOLTMETER_CALIBRATE			178     // Holder for calibration of the on-screen voltmeter
 #define EEPROM_WATERFALL_COLOR_SCHEME		179     // Color scheme for waterfall display
@@ -511,7 +509,7 @@ void		UiConfiguration_UpdateMacroCap(void);
 #define EEPROM_FLAGS2						298     // Miscellaneous status flag, saved in EEPROM - see variable "flags2"
 #define EEPROM_FILTER_DISP_COLOUR			299     // This contains the color of the line under the spectrum/waterfall display
 #define EEPROM_TX_IQ_10M_GAIN_BALANCE_TRANS_OFF		300     // IQ Gain balance for AM transmission
-#define EEPROM_TX_IQ_10_PHASE_BALANCE_TRANS_OFF		301     // IQ Gain balance for FM transmission
+#define EEPROM_TX_IQ_10M_PHASE_BALANCE_TRANS_OFF		301     // IQ Gain balance for FM transmission
 #define EEPROM_FM_SUBAUDIBLE_TONE_GEN		302     // index for storage of subaudible tone generation
 #define EEPROM_FM_TONE_BURST_MODE			303     // tone burst mode
 #define EEPROM_FM_SQUELCH_SETTING			304     // FM squelch setting
@@ -593,9 +591,23 @@ void		UiConfiguration_UpdateMacroCap(void);
 
 #define EEPROM_DSP_MODE_MASK				408
 #define EEPROM_ENABLE_PTT_RTS				409
-#define EEPROM_CW_DECODER_THRESH					410
-#define EEPROM_CW_DECODER_BLOCKSIZE				411
-#define EEPROM_FIRST_UNUSED 				412		// change this if new value ids are introduced, must be correct at any time
+#define EEPROM_CW_DECODER_THRESH			410
+#define EEPROM_CW_DECODER_BLOCKSIZE			411
+#define EEPROM_SMETER_ALPHAS                412
+#define EEPROM_ADJ_TX_IQ_SOMEBANDS	        413     // unused, may be reused due to short usage time in its original
+#define EEPROM_TX_IQ_20M_GAIN_BALANCE		        414
+#define EEPROM_TX_IQ_20M_PHASE_BALANCE		        415
+#define EEPROM_TX_IQ_15M_GAIN_BALANCE		        416
+#define EEPROM_TX_IQ_15M_PHASE_BALANCE		        417
+#define EEPROM_TX_IQ_10M_UP_GAIN_BALANCE		    418
+#define EEPROM_TX_IQ_10M_UP_PHASE_BALANCE		    419
+#define EEPROM_TX_IQ_20M_GAIN_BALANCE_TRANS_OFF		420
+#define EEPROM_TX_IQ_20M_PHASE_BALANCE_TRANS_OFF	421
+#define EEPROM_TX_IQ_15M_GAIN_BALANCE_TRANS_OFF		422
+#define EEPROM_TX_IQ_15M_PHASE_BALANCE_TRANS_OFF	423
+#define EEPROM_TX_IQ_10M_UP_GAIN_BALANCE_TRANS_OFF	424
+#define EEPROM_TX_IQ_10M_UP_PHASE_BALANCE_TRANS_OFF	425
+#define EEPROM_FIRST_UNUSED 				426		// change this if new value ids are introduced, must be correct at any time
 
 #define MAX_VAR_ADDR (EEPROM_FIRST_UNUSED - 1)
 
