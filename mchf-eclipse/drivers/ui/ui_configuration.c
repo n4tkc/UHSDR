@@ -26,11 +26,12 @@
 #include "audio_management.h"
 #include "ui.h" // bandInfo
 
-// Virtual eeprom
-#include "eeprom.h"
 #include "uhsdr_hw_i2c.h"
 #include "uhsdr_rtc.h"
 
+#if (MAX_VAR_ADDR > NB_OF_VAR)
+    #error "Too many eeprom variables defined in ui_configuration.h (MAX_VAR_ADDR > NB_OF_VAR ). Please change maximum number of vars in eeprom.h"
+#endif
 
 
 static int32_t UiConfiguration_CompareConfigBuildVersions(uint major, uint32_t minor, uint32_t release);
@@ -86,8 +87,9 @@ const ConfigEntryDescriptor ConfigEntryInfo[] =
     { ConfigEntry_Int32_16, EEPROM_AGC_WDSP_TAU_DECAY_3,&agc_wdsp_conf.tau_decay[3], 250,100,5000},  // NO INT DEFAULT PROBLEM
     { ConfigEntry_Int32_16, EEPROM_AGC_WDSP_TAU_DECAY_4,&agc_wdsp_conf.tau_decay[4], 50,100,5000}, // NO INT DEFAULT PROBLEM
     { ConfigEntry_Int32_16, EEPROM_AGC_WDSP_TAU_HANG_DECAY,&agc_wdsp_conf.tau_hang_decay, 500,100,5000}, // NO INT DEFAULT PROBLEM
-    { ConfigEntry_UInt8, EEPROM_MIC_GAIN,&ts.tx_gain[TX_AUDIO_MIC],MIC_GAIN_DEFAULT,MIC_GAIN_MIN,MIC_GAIN_MAX},
-    { ConfigEntry_UInt8, EEPROM_LINE_GAIN,&ts.tx_gain[TX_AUDIO_LINEIN_L],LINE_GAIN_DEFAULT,LINE_GAIN_MIN,LINE_GAIN_MAX},
+    { ConfigEntry_Int32_16, EEPROM_MIC_BOOST,&ts.tx_mic_boost, MIC_BOOST_DEFAULT,MIC_BOOST_MIN,MIC_BOOST_MAX},
+    { ConfigEntry_UInt8, EEPROM_MIC_GAIN,&ts.tx_gain[TX_AUDIO_MIC], MIC_GAIN_DEFAULT,MIC_GAIN_MIN,MIC_GAIN_MAX},
+    { ConfigEntry_UInt8, EEPROM_LINE_GAIN,&ts.tx_gain[TX_AUDIO_LINEIN_L], LINE_GAIN_DEFAULT,LINE_GAIN_MIN,LINE_GAIN_MAX},
     { ConfigEntry_UInt32_16, EEPROM_SIDETONE_FREQ,&ts.cw_sidetone_freq,CW_SIDETONE_FREQ_DEFAULT,CW_SIDETONE_FREQ_MIN,CW_SIDETONE_FREQ_MAX},
     { ConfigEntry_UInt8, EEPROM_SPECTRUM_FILTER,&ts.spectrum_filter,SPECTRUM_FILTER_DEFAULT,SPECTRUM_FILTER_MIN,SPECTRUM_FILTER_MAX},
 #ifdef OBSOLETE_AGC
@@ -270,7 +272,9 @@ const ConfigEntryDescriptor ConfigEntryInfo[] =
 	{ ConfigEntry_Int32_16, EEPROM_CW_DECODER_THRESH,&cw_decoder_config.thresh,CW_DECODER_THRESH_DEFAULT,CW_DECODER_THRESH_MIN,CW_DECODER_THRESH_MAX}, // NO INT DEFAULT PROBLEM
 	{ ConfigEntry_Int32_16, EEPROM_CW_DECODER_BLOCKSIZE,&cw_decoder_config.blocksize,CW_DECODER_BLOCKSIZE_DEFAULT,CW_DECODER_BLOCKSIZE_MIN,CW_DECODER_BLOCKSIZE_MAX}, // NO INT DEFAULT PROBLEM
 	{ ConfigEntry_UInt8x2, EEPROM_SMETER_ALPHAS,&sm.config.alphaCombined,CONFIG_UINT8x2_COMBINE(SMETER_ALPHA_ATTACK_DEFAULT, SMETER_ALPHA_DECAY_DEFAULT), CONFIG_UINT8x2_COMBINE(SMETER_ALPHA_MIN, SMETER_ALPHA_MIN), CONFIG_UINT8x2_COMBINE(SMETER_ALPHA_MAX,SMETER_ALPHA_MAX) },
-
+    { ConfigEntry_UInt8, EEPROM_VSWR_PROTECTION_THRESHOLD,&ts.vswr_protection_threshold,1,1,10},
+	{ ConfigEntry_UInt16, EEPROM_EXPFLAGS1,&ts.expflags1,EXPFLAGS1_CONFIG_DEFAULT,0,0xffff},
+	
     // the entry below MUST be the last entry, and only at the last position Stop is allowed
     {
         ConfigEntry_Stop
@@ -494,9 +498,18 @@ static uint16_t UiWriteSettingEEPROM_UInt32(uint16_t addrH, uint16_t addrL, uint
     return retval;
 }
 
-static uint32_t UiConfiguration_LimitFrequency(const BandInfo* bandInfo, const uint32_t freq, bool set_to_default)
+static uint32_t UiConfiguration_LimitFrequency(BandInfo_c* bandInfo, const uint32_t freq, bool set_to_default)
 {
     uint32_t retval = freq;
+    bool do_reset = false;
+
+#ifndef USE_MEMORY_MODE
+        // Load default for this band
+    const uint32_t resetval = bandInfo->tune + DEFAULT_FREQ_OFFSET;
+#else
+    const uint32_t resetval = DEFAULT_MEMORY_FREQ;
+#endif
+
 
     // this code handles the migration of stored frequency settings from the older approach to/from the newer
     // approach. We will have to introduce the newer approach with firmware 2.11.0 in order not to cause
@@ -511,18 +524,20 @@ static uint32_t UiConfiguration_LimitFrequency(const BandInfo* bandInfo, const u
 
     if(set_to_default)
     {
-        // Load default for this band
-        retval = bandInfo->tune + DEFAULT_FREQ_OFFSET;
+        do_reset = true;
     }
     else
     {
-        if((ts.flags2 & FLAGS2_FREQ_MEM_LIMIT_RELAX) == 0 && RadioManagement_FreqIsInBand(bandInfo,retval) == false)       // xxxx relax memory-save frequency restrictions and is it within the allowed range?
+        if((ts.flags2 & FLAGS2_FREQ_MEM_LIMIT_RELAX) == 0)
         {
-            // Load default for this band
-            retval = bandInfo->tune + DEFAULT_FREQ_OFFSET;
+#ifndef USE_MEMORY_MODE
+            do_reset = RadioManagement_FreqIsInBand(bandInfo,retval) == false;       // xxxx relax memory-save frequency restrictions and is it within the allowed range?
+#else
+            do_reset = RadioManagement_FreqIsInEnabledBand(retval) == false;
+#endif
         }
     }
-    return retval;
+    return do_reset == true? resetval : retval;
 }
 
 void UiReadSettingsBandMode(const uint8_t i, const uint16_t band_mode, const uint16_t band_freq_high, const uint16_t  band_freq_low, VfoReg* vforeg, bool load_default)
@@ -535,11 +550,11 @@ void UiReadSettingsBandMode(const uint8_t i, const uint16_t band_mode, const uin
             load_default);
 
     // Try to read Freq saved values
-    UiReadSettingEEPROM_UInt32(band_freq_high + i, band_freq_low + i,&value32,bandInfo[i].tune + DEFAULT_FREQ_OFFSET,0,0xffffffff, load_default);
+    UiReadSettingEEPROM_UInt32(band_freq_high + i, band_freq_low + i,&value32,bandInfo[i]->tune + DEFAULT_FREQ_OFFSET,0,0xffffffff, load_default);
     {
         // We make sure to read only frequency which are permitted for band in given
         // configuration.
-        vforeg->dial_value = UiConfiguration_LimitFrequency(&bandInfo[i],value32, load_default);
+        vforeg->dial_value = UiConfiguration_LimitFrequency(bandInfo[i],value32, load_default);
     }
 }
 
@@ -848,7 +863,7 @@ void UiConfiguration_FixDefaultsNotLoadedIssue()
         // values have been stored by older version of firmware
         uint32_t values[] = { IQ_20M, IQ_15M, IQ_10M_UP };
         bool not_all_minus_one = false;
-        for (int i = 0; i < sizeof(values)/sizeof(values[0]) && not_all_minus_one == false ; i++)
+        for (uint32_t i = 0; i < sizeof(values)/sizeof(values[0]) && not_all_minus_one == false ; i++)
         {
             not_all_minus_one = not_all_minus_one || (iq_adjust[values[i]].adj.tx[IQ_TRANS_ON].gain != -1 || iq_adjust[values[i]].adj.tx[IQ_TRANS_ON].phase != -1);
             not_all_minus_one = not_all_minus_one || (iq_adjust[values[i]].adj.tx[IQ_TRANS_OFF].gain != -1 || iq_adjust[values[i]].adj.tx[IQ_TRANS_OFF].phase != -1);
@@ -857,7 +872,7 @@ void UiConfiguration_FixDefaultsNotLoadedIssue()
         // okay, we have every value at -1 AND values stored in an older firmware than 2.9.86, we can safely rewrite all values to the right default
         if (not_all_minus_one == false)
         {
-            for (int i = 0; i < sizeof(values)/sizeof(values[0]); i++)
+            for (uint32_t i = 0; i < sizeof(values)/sizeof(values[0]); i++)
             {
                 iq_adjust[values[i]].adj.tx[IQ_TRANS_ON].gain = IQ_BALANCE_OFF;
                 iq_adjust[values[i]].adj.tx[IQ_TRANS_ON].phase = IQ_BALANCE_OFF;
@@ -885,10 +900,16 @@ void UiConfiguration_LoadEepromValues(bool load_freq_mode_defaults, bool load_ee
 
     // ------------------------------------------------------------------------------------
     // Try to read Band and Mode saved values, but read freq-limit-settings before
+    uint8_t band_mem_idx;
     UiReadSettingEEPROM_UInt8x2_Split(EEPROM_BAND_MODE,
             &ts.dmod_mode, DEMOD_LSB, 0, DEMOD_MAX_MODE,
-            &ts.band, BAND_MODE_80, 0, MAX_BANDS -1,
+            &band_mem_idx, BAND_MODE_80, 0, MAX_BANDS -1,
             load_eeprom_defaults);
+
+    // restore the bandInfo for a given band info set and band memory index
+    bandInfo = bandInfos[bandinfo_idx].bands;
+    ts.band = RadioManagement_GetBandInfo(band_mem_idx);
+
 
     // demodulator mode might not be right for saved band!
     if(load_freq_mode_defaults)       // freq defaults to be loaded?
@@ -904,7 +925,7 @@ void UiConfiguration_LoadEepromValues(bool load_freq_mode_defaults, bool load_ee
         // We have loaded from eeprom the last used band, but can't just
         // load saved frequency, as it could be out of band, so do a
         // boundary check first (also check to see if defaults should be loaded)
-        df.tune_new = UiConfiguration_LimitFrequency(&bandInfo[ts.band], value32, load_eeprom_defaults || load_freq_mode_defaults);
+        df.tune_new = UiConfiguration_LimitFrequency(ts.band, value32, load_eeprom_defaults || load_freq_mode_defaults);
     }
     // Try to read saved per-band values for frequency, mode and filter
 
@@ -959,9 +980,6 @@ uint16_t UiConfiguration_SaveEepromValues(void)
     }
     else
     {
-        // disable DSP during write because it decreases speed tremendous
-        //  ts.dsp.active &= 0xfa;  // turn off DSP
-
         const uint8_t dmod_mode = ts.dmod_mode;
 
         // TODO: THIS IS UGLY: We are switching to RAM based storage in order to gain speed
@@ -973,16 +991,16 @@ uint16_t UiConfiguration_SaveEepromValues(void)
             ConfigStorage_CopySerial2RAMCache();
         }
 
-        if(ts.band < (MAX_BANDS) && ts.cat_band_index == 255)			// not in a sandbox
+        if(RadioManagement_IsGenericBand(ts.band) == false && ts.cat_band_index == 255)			// not in a sandbox
         {
             // save current band/frequency/mode settings
-            vfo[is_vfo_b()?VFO_B:VFO_A].band[ts.band].dial_value = df.tune_new;
+            vfo[get_active_vfo()].band[ts.band->band_mode].dial_value = df.tune_new;
             // Save decode mode
-            vfo[is_vfo_b()?VFO_B:VFO_A].band[ts.band].decod_mode = dmod_mode;
+            vfo[get_active_vfo()].band[ts.band->band_mode].decod_mode = dmod_mode;
 
             // TODO: move value to a static variable, so that it can be read/written with standard approach
             retval = UiWriteSettingEEPROM_UInt8x2(EEPROM_BAND_MODE,
-                                       ((uint16_t)ts.band| dmod_mode << 8));
+                                       ((uint16_t)ts.band->band_mode| dmod_mode << 8));
 
             // TODO: move value to a static variable, so that it can be read/written with standard approach
             if (retval == HAL_OK)

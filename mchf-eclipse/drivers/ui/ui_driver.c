@@ -15,6 +15,7 @@
 // Common
 #include "uhsdr_board.h"
 #include "profiling.h"
+#include <assert.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,10 +86,10 @@ static void     UiDriver_UpdateLcdFreq(ulong dial_freq,ushort color,ushort mode)
 static bool 	UiDriver_IsButtonPressed(ulong button_num);
 static void		UiDriver_TimeScheduler();				// Also handles audio gain and switching of audio on return from TX back to RX
 static void 	UiDriver_ChangeToNextDemodMode(bool select_alternative_mode);
-static void 	UiDriver_ChangeBand(uchar is_up);
+static void 	UiDriver_ChangeBand(bool is_up);
 static bool 	UiDriver_CheckFrequencyEncoder();
 
-static void     UiDriver_DisplayBand(uchar band);
+static void     UiDriver_DisplayBand(const BandInfo* band);
 static void     UiDriver_DisplayBandForFreq(uint32_t freq);
 
 static void     UiDriver_DisplayEncoderOneMode();
@@ -131,7 +132,7 @@ static bool	    UiDriver_TouchscreenCalibration();
 
 static void     UiDriver_PowerDownCleanup(bool saveConfiguration);
 
-static void UiDriver_HandlePowerLevelChange(band_mode_t band, uint8_t power_level);
+static void UiDriver_HandlePowerLevelChange(const BandInfo* band, uint8_t power_level);
 static void UiDriver_HandleBandButtons(uint16_t button);
 
 static void UiDriver_KeyTestScreen();
@@ -286,7 +287,7 @@ PowerMeter					pwmt;
 // ------------------------------------------------
 
 uchar drv_state = 0;
-ui_driver_mode_t ui_driver_state;
+ui_driver_mode_t ui_driver_state = { .dmod_mode = 255, .digital_mode = 255 }; // initialize so that at startup we detect change
 bool filter_path_change = false;
 
 // check if touched point is within rectangle of valid action
@@ -379,6 +380,10 @@ bool is_vfo_b()
 	return (ts.vfo_mem_mode & VFO_MEM_MODE_VFO_B) != 0;
 }
 
+vfo_name_t get_active_vfo()
+{
+    return is_vfo_b()?VFO_B:VFO_A;
+}
 // FIXME: The DSP stuff should go in a separate file
 /**
  *
@@ -505,6 +510,25 @@ bool UiDriver_ProcessKeyActions(const keyaction_list_descr_t* kld)
 
 	return retval;
 }
+
+static void UiDriver_DisplayMessageStart()
+{
+    UiSpectrum_Clear();
+}
+
+static void UiDriver_DisplayMessageStop()
+{
+    if(ts.menu_mode)
+    {
+        UiMenu_RenderMenu(MENU_RENDER_ONLY);    // update menu display, was destroyed by message
+    }
+    else
+    {
+        UiSpectrum_Init();          // not in menu mode, redraw spectrum scope
+    }
+}
+
+
 /**
  * @brief restarts lcd blanking timer, called in all functions which detect user interaction with the device
  */
@@ -729,10 +753,6 @@ static void UiDriver_ToggleDigitalMode()
  */
 void UiDriver_FrequencyUpdateLOandDisplay(bool full_update)
 {
-	if (full_update)
-	{
-		ts.refresh_freq_disp = 1;           // update ALL digits
-	}
 	if(is_splitmode())
 	{
 		// SPLIT mode
@@ -743,7 +763,6 @@ void UiDriver_FrequencyUpdateLOandDisplay(bool full_update)
 	{
 		UiDriver_UpdateFrequency(false,UFM_AUTOMATIC);
 	}
-	ts.refresh_freq_disp = 0;           // update ALL digits
 }
 
 void UiDriver_DebugInfo_DisplayEnable(bool enable)
@@ -778,7 +797,7 @@ void UiDriver_SpectrumChangeLayoutParameters()
  * Sets a power level and updates the display accordingly.
  * @param power_level
  */
-void UiDriver_HandlePowerLevelChange(band_mode_t band, uint8_t power_level)
+void UiDriver_HandlePowerLevelChange(const BandInfo* band, uint8_t power_level)
 {
 	if (RadioManagement_SetPowerLevel(band,power_level))
 	{
@@ -793,12 +812,12 @@ void UiDriver_HandlePowerLevelChange(band_mode_t band, uint8_t power_level)
 void UiDriver_HandleBandButtons(uint16_t button)
 {
 
-	static const int BAND_DOWN = 0;
-	static const int BAND_UP = 1;
+	static const bool BAND_DOWN = false;
+	static const bool BAND_UP = true;
 
 	bool buttondirSwap = (ts.flags1 & FLAGS1_SWAP_BAND_BTN)?true:false;
-	uint8_t dir;
 
+	bool dir;
 
 	if (button == BUTTON_BNDM)
 	{
@@ -942,7 +961,7 @@ void UiDriver_Init()
 
 	osc->setPPM((float)ts.freq_cal/10.0);
 
-	df.tune_new = vfo[is_vfo_b()?VFO_B:VFO_A].band[ts.band].dial_value;		// init "tuning dial" frequency based on restored settings
+	df.tune_new = vfo[get_active_vfo()].band[ts.band->band_mode].dial_value;		// init "tuning dial" frequency based on restored settings
 	df.tune_old = 0; // with this we force a frequency change once the main loop becomes active
 
 	ts.cw_lsb = RadioManagement_CalculateCWSidebandMode();			// determine CW sideband mode from the restored frequency
@@ -954,7 +973,7 @@ void UiDriver_Init()
 
 	// Reset inter driver requests flag
 	ts.LcdRefreshReq	= 0;
-	ts.new_band 		= ts.band;
+	ts.new_band 		= ts.band->band_mode;
 	df.step_new 		= df.tuning_step;
 
 	// Extra HW init
@@ -1193,11 +1212,11 @@ void UiAction_CopyVfoAB()
 	VfoReg* vfo_store;
 	if(is_vfo_b())      // are we in VFO B mode?
 	{
-		vfo_store = &vfo[VFO_A].band[ts.band];
+		vfo_store = &vfo[VFO_A].band[ts.band->band_mode];
 	}
 	else        // we were in VFO A mode
 	{
-		vfo_store = &vfo[VFO_B].band[ts.band];
+		vfo_store = &vfo[VFO_B].band[ts.band->band_mode];
 	}
 	vfo_store->dial_value = df.tune_new;
 	vfo_store->decod_mode = ts.dmod_mode;                   // copy active VFO settings into other VFO
@@ -1219,7 +1238,14 @@ void UiAction_ToggleVfoAB()
 
 	uint32_t old_dmod_mode = ts.dmod_mode;
 
+	/**
+	 * @warning - The two functions below call the same function
+	 * -> RadioManagement_SetDemodMode() at the end,
+	 * so some reorganization should be done to better handle switching modes,
+	 * in a more central way...
+	 */
 	RadioManagement_ToggleVfoAB();
+	UiDriver_SetDemodMode( ts.dmod_mode );
 
 	UiDriver_FButton_F4ActiveVFO();
 
@@ -1564,62 +1590,61 @@ void UiDriver_DisplayDemodMode()
 	UiDriver_DisplayModulationType();
 }
 
-
+/**
+ * This function gives a visual indication of the selected step size for the tuning knob. It draws a line under the respective digit in the frequency.
+ * This function is closely coupled to the code for displaying the frequency digits.
+ */
 void UiDriver_DisplayFreqStepSize()
 {
 
-	int	line_loc;
 	static	bool	step_line = 0;	// used to indicate the presence of a step line
-	uint32_t	color;
-	uint32_t 	stepsize_background;
 
-	color = ts.tune_step?Cyan:White;		// is this a "Temporary" step size from press-and-hold?
-	stepsize_background = (ts.flags1 & FLAGS1_DYN_TUNE_ENABLE)?Blue:Black;
+	const uint16_t font_width = is_splitmode()?SMALL_FONT_WIDTH:LARGE_FONT_WIDTH;
+    const uint16_t x_pos = is_splitmode()?ts.Layout->TUNE_SPLIT_FREQ_X:ts.Layout->TUNE_FREQ.x;
+    const uint16_t x_right = x_pos + (9* font_width);
+	const uint32_t color = ts.tune_step?Cyan:White;		// is this a "Temporary" step size from press-and-hold?
+	const uint32_t stepsize_background = (ts.flags1 & FLAGS1_DYN_TUNE_ENABLE)?Blue:Black;
 	// dynamic_tuning active -> yes, display on Grey3
 
 	if(step_line)	 	// Remove underline indicating step size if one had been drawn
 	{
-		UiLcdHy28_DrawStraightLineDouble(ts.Layout->TUNE_FREQ.x,(ts.Layout->TUNE_FREQ.y + 24),(LARGE_FONT_WIDTH*10),LCD_DIR_HORIZONTAL,Black);
-		UiLcdHy28_DrawStraightLineDouble(ts.Layout->TUNE_SPLIT_FREQ_X,(ts.Layout->TUNE_FREQ.y + 24),(SMALL_FONT_WIDTH*10),LCD_DIR_HORIZONTAL,Black);
+        const int32_t space_l = 3*(LARGE_FONT_WIDTH * 3 + LARGE_FONT_WIDTH/2); //3 digits plus a half width dot
+        const int32_t space_s = 3*(SMALL_FONT_WIDTH * 3 + SMALL_FONT_WIDTH/2); //3 digits plus a half width dot
+
+		UiLcdHy28_DrawStraightLineDouble(ts.Layout->TUNE_FREQ.x,(ts.Layout->TUNE_FREQ.y + 24),space_l,LCD_DIR_HORIZONTAL,Black);
+		UiLcdHy28_DrawStraightLineDouble(ts.Layout->TUNE_SPLIT_FREQ_X,(ts.Layout->TUNE_FREQ.y + 24),space_s,LCD_DIR_HORIZONTAL,Black);
 	}
 
 	// Blank old step size
 	// UiLcdHy28_DrawFullRect(POS_TUNE_STEP_X,POS_TUNE_STEP_Y-1,POS_TUNE_STEP_MASK_H,POS_TUNE_STEP_MASK_W,stepsize_background);
 
-	{
-		char step_name[10];
+	char step_name[10];
+	// I know the code below will not win the price for the most readable code
+	// ever. But it does the job of display any freq step somewhat reasonable.
+	// khz/Mhz only whole  khz/Mhz is shown, no fraction
+	// showing fractions would require some more coding, which is not yet necessary
+	const int32_t pow10 = log10f(df.tuning_step);
+	const int32_t digit_group = pow10/3;
+	const int32_t digit_idx = pow10%3;
 
-		// I know the code below will not win the price for the most readable code
-		// ever. But it does the job of display any freq step somewhat reasonable.
-		// khz/Mhz only whole  khz/Mhz is shown, no fraction
-		// showing fractions would require some more coding, which is not yet necessary
-		const uint32_t pow10 = log10f(df.tuning_step);
-		line_loc = 9 - pow10 - pow10/3;
-		if (line_loc < 0)
-		{
-			line_loc = -1;
-		}
-		const char* stepUnitPrefix[] = { "","k","M","G","T"};
-		snprintf(step_name,10,"%d%sHz",(int)(df.tuning_step/exp10((pow10/3)*3)), stepUnitPrefix[pow10/3]);
+	const char* stepUnitPrefix[] = { "","k","M","G","T"};
+	snprintf(step_name,10,"%d%sHz",(int)(df.tuning_step/exp10((digit_group)*3)), stepUnitPrefix[digit_group]);
 
-		UiLcdHy28_PrintTextCentered(ts.Layout->TUNE_STEP.x,ts.Layout->TUNE_STEP.y,ts.Layout->TUNE_STEP.w,step_name,color,stepsize_background,0);
-	}
-	//
-	if((ts.freq_step_config & FREQ_STEP_SHOW_MARKER) && line_loc >= 0)	 		// is frequency step marker line enabled?
+	UiLcdHy28_PrintTextCentered(ts.Layout->TUNE_STEP.x,ts.Layout->TUNE_STEP.y,ts.Layout->TUNE_STEP.w,step_name,color,stepsize_background,0);
+
+	if((ts.freq_step_config & FREQ_STEP_SHOW_MARKER) && pow10 < MAX_DIGITS)          // is frequency step marker line enabled?
 	{
-		if(is_splitmode())
-		{
-			UiLcdHy28_DrawStraightLineDouble((ts.Layout->TUNE_SPLIT_FREQ_X + (SMALL_FONT_WIDTH * line_loc)),(ts.Layout->TUNE_FREQ.y + 24),(SMALL_FONT_WIDTH),LCD_DIR_HORIZONTAL,White);
-		}
-		else
-		{
-			UiLcdHy28_DrawStraightLineDouble((ts.Layout->TUNE_FREQ.x + (LARGE_FONT_WIDTH * line_loc)),(ts.Layout->TUNE_FREQ.y + 24),(LARGE_FONT_WIDTH),LCD_DIR_HORIZONTAL,White);
-		}
-		step_line = 1;	// indicate that a line under the step size had been drawn
+
+	    const int32_t group_space = (font_width * 3) + font_width/2; //3 digits plus a half width dot
+
+	    const uint32_t line_pos =  x_right -  digit_idx * font_width - (digit_group * group_space);
+
+	    UiLcdHy28_DrawStraightLineDouble(line_pos, (ts.Layout->TUNE_FREQ.y + 24),font_width,LCD_DIR_HORIZONTAL,White);
+	    step_line = 1;	// indicate that a line under the step size had been drawn
 	}
 	else	// marker line not enabled
 	{
-		step_line = 0;	// we don't need to erase "step size" marker line in the future
+	    step_line = 0;	// we don't need to erase "step size" marker line in the future
 	}
 }
 
@@ -1658,14 +1683,22 @@ static void UiDriver_DisplayMemoryLabel()
 {
 	char txt[12];
 	uint32_t col = White;
-	if (ts.band < MAX_BAND_NUM && ts.cat_band_index == 255)
+	if (ts.band->band_mode < MAX_BAND_NUM && ts.cat_band_index == 255)
 	{
-		snprintf(txt,12,"Bnd%s ", bandInfo[ts.band].name);
+
+#ifdef USE_MEMORY_MODE
+	    // Enable all band memories, don't use band names
+        snprintf(txt,12,"Mem%02d   ", ts.band->band_mode);
+#else
+        // Each memory has its designated band, use that as band
+        snprintf(txt,12,"Bnd%s   ", ts.band->name);
+#endif
 	}
 	if (ts.cat_band_index != 255)		// no band storage place active because of "CAT running in sandbox"
 	{
-		snprintf(txt,12,"  CAT  ");
+		snprintf(txt,12,"  CAT   ");
 	}
+	txt[8]='\0'; // "Bnd" + 4digits + "m" = max 8 characters. We make sure the string is never longer than that.
 	UiLcdHy28_PrintText(ts.Layout->MEMORYLABEL.x,  ts.Layout->MEMORYLABEL.y,txt,col,Black,0);
 }
 
@@ -1673,19 +1706,20 @@ static void UiDriver_DisplayMemoryLabel()
  * Display the ham or broadcast band name of the currently selected band
  * @param band the band id, last band id is BAND_MODE_GEN, which is everything outside ham bands
  */
-static void UiDriver_DisplayBand(uchar band)
+static void UiDriver_DisplayBand(const BandInfo* band)
 {
-	const char* bandName;
-	bool print_bc_name = true;
-	int idx;
 
-	if (band < MAX_BAND_NUM)
+	if (band != NULL)
 	{
+	    const char* bandName;
+	    bool print_bc_name = true;
+
 		uint16_t col = Orange; // default color for non-bc band
 
 		// only if we are not in a ham band, we check the name of a broadcast band
-		if (band == BAND_MODE_GEN)
+		if (RadioManagement_IsGenericBand(band))
 		{
+		    int idx;
 			for (idx = 0; bandGenInfo[idx].start !=0; idx++)
 			{
 				if (df.tune_old >= bandGenInfo[idx].start && df.tune_old < bandGenInfo[idx].end)
@@ -1717,7 +1751,7 @@ static void UiDriver_DisplayBand(uchar band)
 		else
 		{
 			print_bc_name = true;
-			bandName = bandInfo[band].name;
+			bandName = band->name;
 			ts.bc_band = 0xff;
 		}
 		if (print_bc_name)
@@ -1728,19 +1762,21 @@ static void UiDriver_DisplayBand(uchar band)
 	}
 }
 
-//*----------------------------------------------------------------------------
-//* Function Name       : UiDriverInitMainFreqDisplay
-//* Object              :
-//* Input Parameters    :
-//* Output Parameters   :
-//* Functions called    :
-//*----------------------------------------------------------------------------
+
 static void UiDriver_CreateMainFreqDisplay()
 {
-	UiDriver_FButton_F3MemSplit();
+    // TODO: Adjust ts.Layout->TUNE_FREQ.x to match 10 digits display approach, would simplify code
+    const uint16_t font_width = LARGE_FONT_WIDTH;
+    const uint16_t x_right = ts.Layout->TUNE_FREQ.x + (9* font_width);
+    const int32_t group_space = (font_width * 3) + font_width/2; //3 digits plus a half width dot
+    const uint32_t box_width =  font_width + (3 * group_space); // 3 x 3 digits in a group with a dot + 1 x single digit == 10 digits
+
+    UiLcdHy28_DrawFullRect(x_right - box_width,ts.Layout->TUNE_FREQ.y,24, box_width, Black);
+    // clear frequency display area for large digits, which is also the max area for split
+
+    UiDriver_FButton_F3MemSplit();
 	if((is_splitmode()))	 	// are we in SPLIT mode?
 	{
-		UiLcdHy28_PrintText(ts.Layout->TUNE_FREQ.x-16,ts.Layout->TUNE_FREQ.y,"          ",White,Black,1);	// clear large frequency digits
 		UiDriver_DisplaySplitFreqLabels();
 	}
 	UiDriver_DisplayFreqStepSize();
@@ -1804,9 +1840,6 @@ static void UiDriver_CreateDesktop()
 
 	// Clear display
 	UiLcdHy28_LcdClear(Black);
-
-	// Create Band value
-	UiDriver_DisplayBand(ts.band);
 
 	// Frequency
 	UiDriver_CreateMainFreqDisplay();
@@ -1895,42 +1928,66 @@ static void UiDriver_DeleteSMeterLabels()
 
 static void UiDriver_DrawPowerMeterLabels()
 {
-	uchar   i;
-	char    num[20];
+
+    const uint16_t y_pos = (ts.Layout->SM_IND.y + 5);
+    const uint16_t x_pos = (ts.Layout->SM_IND.x + 18);
+
+    const int32_t maxW = ((mchf_pa.max_power > 5000) ? mchf_pa.max_power : 5000)  / 1000;
+
+    // get the pwr increment in next integer number of 0.5W steps
+    const float32_t PWR_INCR = (maxW % 5 == 0)? (maxW/10.0) : (maxW/5+1)/2.0  ; //.
 
 	// Leading text
-	UiLcdHy28_PrintText(((ts.Layout->SM_IND.x + 18) - 12),(ts.Layout->SM_IND.y + 5),"P",  White,Black,4);
 
-	UiLcdHy28_PrintText((ts.Layout->SM_IND.x + 185),(ts.Layout->SM_IND.y + 5)," W",White,Black,4);
+	UiLcdHy28_PrintText(x_pos - 12 , y_pos,"P" , White, Black, 4);
+	UiLcdHy28_PrintText(x_pos + 167, y_pos," W", White, Black, 4);
 
 	// Draw middle line
-	UiLcdHy28_DrawStraightLineDouble((ts.Layout->SM_IND.x + 18),(ts.Layout->SM_IND.y + 20),170,LCD_DIR_HORIZONTAL,White);
-	// S Meter -> Y + 20
+	UiLcdHy28_DrawStraightLineDouble(x_pos, y_pos + 15, 170, LCD_DIR_HORIZONTAL, White);
 
 	// Draw s markers on middle white line
-	for(i = 0; i < 12; i++)
+	for(int i = 0; i < 12; i++)
 	{
-		uint8_t v_s;
-		if(i < 10)
+
+		uint16_t pwr_val = i * PWR_INCR;
+
+        char    num[4];
+
+		if(pwr_val < 10)
 		{
-			num[0] = i + 0x30;
+			num[0] = pwr_val + 0x30;
 			num[1] = 0;
 		}
-		else
+		else if (pwr_val < 100)
 		{
-			num[0] = i/10 + 0x30;
-			num[1] = i%10 + 0x30;
+			num[0] = pwr_val/10 + 0x30;
+			num[1] = pwr_val%10 + 0x30;
 			num[2] = 0;
 		}
-
-		// Draw s text, only odd numbers
-		if(!(i%2))
+        else if (pwr_val < 1000)
+        {
+            num[0] = pwr_val/100 + 0x30;
+            num[1] = (pwr_val%100)/10 + 0x30;
+            num[2] = pwr_val%10 + 0x30;
+            num[3] = 0;
+        }
+		else
 		{
-			UiLcdHy28_PrintText(((ts.Layout->SM_IND.x + 18) - 3 + i*15),(ts.Layout->SM_IND.y + 5),num,White,Black,4);
+		    num[0] = 0; // no value display for larger values
 		}
-		// Lines
-		v_s=(i%2)?3:5;
-		UiLcdHy28_DrawStraightLineDouble(((ts.Layout->SM_IND.x + 18) + i*15),((ts.Layout->SM_IND.y + 20) - v_s),v_s,LCD_DIR_VERTICAL,White);
+		const int dw = UiLcdHy28_TextWidth(num,4);
+
+		// Only every second value is displayed as number,
+		// even indicies are used
+		if(i%2 == 0)
+		{
+			UiLcdHy28_PrintText((x_pos - dw/2 + i*15), y_pos, num, White,Black,4);
+		}
+
+		// Lines, even indicies are shorter to make room for numbers
+		uint8_t v_s= (i%2 != 0)? 3 : 5;
+
+		UiLcdHy28_DrawStraightLineDouble((x_pos + i*15),(y_pos + 15) - v_s, v_s, LCD_DIR_VERTICAL, White);
 	}
 
 
@@ -2132,23 +2189,19 @@ typedef struct MeterState_s
 
 static MeterState meters[METER_NUM];
 
-//*----------------------------------------------------------------------------
-//* Function Name       : UiDriverUpdateBtmMeter
-//* Object              : redraw indicator
-//* Input Parameters    : val=indicated value, warn=red warning threshold
-//* Output Parameters   :
-//* Functions called    :
-//*----------------------------------------------------------------------------
-
+/**
+ * Displays a horizontal meter bar as dash segments.
+ *
+ * @param val value to display. Max value (100%) is SMETER_MAX_LEVEL, higher values are cut off.
+ * @param warn At which value shall value is in red color. 0 to disable.
+ * @param color_norm default, non-warning color
+ * @param meterId index of the meter in the internal meter data storage.
+ */
 static void UiDriver_UpdateMeter(uchar val, uchar warn, uint32_t color_norm, uint8_t meterId)
 {
-	uchar     i;
-	const uint8_t v_s = 3;
-	uint32_t       col = color_norm;
-	uint8_t from, to;
-	uint8_t from_warn = 255;
+    assert(meterId < METER_NUM);
 
-	uint16_t ypos = meterId==METER_TOP?(ts.Layout->SM_IND.y + 28):(ts.Layout->SM_IND.y + 51 - BTM_MINUS);
+	uint8_t from_warn = 255;
 
 	// limit meter
 	if(val > SMETER_MAX_LEVEL)
@@ -2175,6 +2228,7 @@ static void UiDriver_UpdateMeter(uchar val, uchar warn, uint32_t color_norm, uin
 
 	if(val != meters[meterId].last || from_warn != 255)
 	{
+	    uint8_t from, to;
 
 		// decide if we need to draw more boxes or delete some
 		if (val > meters[meterId].last)
@@ -2201,7 +2255,18 @@ static void UiDriver_UpdateMeter(uchar val, uchar warn, uint32_t color_norm, uin
 			from = 1;
 		}
 
-		for(i = from; i < to; i++)
+	    uint32_t col = color_norm;
+	    // at start: use the requested value color
+
+	    // the code below is responsible for location and size of the dash segments
+        // and the drawing
+
+        // which of the 2 positions our bar will have
+        const uint16_t ypos = meterId==METER_TOP?(ts.Layout->SM_IND.y + 28):(ts.Layout->SM_IND.y + 51 - BTM_MINUS);
+        // segment line
+        const uint8_t v_s = 3; // segment length
+
+		for(int i = from; i < to; i++)
 		{
 			if (i>val)
 			{
@@ -2211,8 +2276,8 @@ static void UiDriver_UpdateMeter(uchar val, uchar warn, uint32_t color_norm, uin
 			{
 				col = Red2;                 // yes - display values above that color in red
 			}
-			// Lines
-			UiLcdHy28_DrawStraightLineTriple(((ts.Layout->SM_IND.x + 18) + i*5),(ypos - v_s),v_s,LCD_DIR_VERTICAL,col);
+
+			UiLcdHy28_DrawStraightLineTriple(((ts.Layout->SM_IND.x + 18) + i*(v_s + 2)),(ypos - v_s),v_s,LCD_DIR_VERTICAL,col);
 		}
 
 		meters[meterId].last = val;
@@ -2225,7 +2290,7 @@ static void UiDriver_UpdateTopMeterA(uchar val)
 {
 	ulong clr;
 	UiMenu_MapColors(ts.meter_colour_up,NULL,&clr);
-	UiDriver_UpdateMeter(val,SMETER_MAX_LEVEL+1,clr,METER_TOP);
+	UiDriver_UpdateMeter(val,0,clr,METER_TOP);
 }
 
 /**
@@ -2253,41 +2318,64 @@ void UiDriver_InitBandSet()
 {
     // TODO: Do this setting based on the detected RF board capabilities
     // set the enabled bands
+    uint32_t min_osc = osc->getMinFrequency();
+    uint32_t max_osc = osc->getMaxFrequency();
+
+    // first we enabled all bands for rx based on the reported tuning frequency range
+    // please note, that this may enabled bands not really usable
+    // as other limitations of the hardware such as lpf/bpf limits
+    // etc. may apply. For instance, the standard MCHF RF has RX BPF/LPF
+    // limiting RX above 32 Mhz.
+
+    // the PA itself has its own limits which are checked before transmitting
+    // so we don't care here about these limits
+
     for(int i = 0; i < MAX_BANDS; i++)
     {
-        vfo[VFO_A].enabled[i] = true; // we enable all bands but right below we turn off a few
-        vfo[VFO_B].enabled[i] = true;
+        const BandInfo* bi = RadioManagement_GetBandInfo(i);
+        band_enabled[i] = ((bi->tune >= min_osc) && ((bi->size + bi->tune) <= max_osc));
     }
 
     switch (ts.rf_board)
     {
     case FOUND_RF_BOARD_MCHF:
-        vfo[VFO_A].enabled[BAND_MODE_2] = false;
-        vfo[VFO_B].enabled[BAND_MODE_2] = false;
-        vfo[VFO_A].enabled[BAND_MODE_70] = false;
-        vfo[VFO_B].enabled[BAND_MODE_70] = false;
-        vfo[VFO_A].enabled[BAND_MODE_23] = false;
-        vfo[VFO_B].enabled[BAND_MODE_23] = false;
-        vfo[VFO_A].enabled[BAND_MODE_23] = false;
-        vfo[VFO_B].enabled[BAND_MODE_23] = false;
-        vfo[VFO_A].enabled[BAND_MODE_4] = false;
-        vfo[VFO_B].enabled[BAND_MODE_4] = false;
-        vfo[VFO_A].enabled[BAND_MODE_6] = false;
-        vfo[VFO_B].enabled[BAND_MODE_6] = false;
-        vfo[VFO_A].enabled[BAND_MODE_630] = false;
-        vfo[VFO_B].enabled[BAND_MODE_630] = false;
-        vfo[VFO_A].enabled[BAND_MODE_2200] = false;
-        vfo[VFO_B].enabled[BAND_MODE_2200] = false;
+        // here you can enable or disable based on additional hardware capabilities
+        // but this should only be used with care
+        /*
+        band_enabled[BAND_MODE_23] = false;
+        band_enabled[BAND_MODE_70] = false;
+        band_enabled[BAND_MODE_2] = false;
+        band_enabled[BAND_MODE_4] = false;
+        band_enabled[BAND_MODE_6] = false;
+        band_enabled[BAND_MODE_630] = false;
+        band_enabled[BAND_MODE_2200] = false;
+        */
         break;
     case FOUND_RF_BOARD_OVI40:
-        vfo[VFO_A].enabled[BAND_MODE_70] = false;
-        vfo[VFO_B].enabled[BAND_MODE_70] = false;
-        vfo[VFO_A].enabled[BAND_MODE_23] = false;
-        vfo[VFO_B].enabled[BAND_MODE_23] = false;
-        vfo[VFO_A].enabled[BAND_MODE_23] = false;
-        vfo[VFO_B].enabled[BAND_MODE_23] = false;
+        /*
+        band_enabled[BAND_MODE_23] = false;
+        band_enabled[BAND_MODE_70] = false;
+        */
         break;
     }
+
+	const char* test = Board_BootloaderVersion();
+	char res = 0;
+	for (int i=0; i<20;i++)			// find last character in bootloader string
+	{
+		if(test[i] == 0)
+		{
+			res = test[i-1];
+			break;
+		}
+	}
+	if(res == 0x61)					// if it is an "a" ==> DF8OE version, enable all bands
+	{
+  		for(int i = 0; i < MAX_BANDS; i++)
+  		{
+      		band_enabled[i] = true;
+  		}
+	}
 }
 
 //*----------------------------------------------------------------------------
@@ -2295,49 +2383,35 @@ void UiDriver_InitBandSet()
 //* Object              : set default values, some could be overwritten later
 static void UiDriver_InitFrequency()
 {
-	ulong i;
-
 	// Clear band values array
-	for(i = 0; i < MAX_BANDS; i++)
+	for(int i = 0; i < MAX_BANDS; i++)
 	{
 		vfo[VFO_A].band[i].dial_value = 0xFFFFFFFF;	// clear dial values
 		vfo[VFO_A].band[i].decod_mode = DEMOD_USB; 	// clear decode mode
-        vfo[VFO_A].band[i].decod_mode = DigitalMode_None;   // clear decode mode
+        vfo[VFO_A].band[i].digital_mode = DigitalMode_None;   // clear digital mode
 		vfo[VFO_B].band[i].dial_value = 0xFFFFFFFF;  // clear dial values
 		vfo[VFO_B].band[i].decod_mode = DEMOD_USB;   // clear decode mode
-        vfo[VFO_B].band[i].decod_mode = DigitalMode_None;   // clear decode mode
+        vfo[VFO_B].band[i].digital_mode = DigitalMode_None;   // clear digital mode
 	}
-
-
 
 	// Lower bands default to LSB mode
 	// TODO: This needs to be checked, some even lower bands have higher numbers now
-	for(i = 0; i < 4; i++)
+	for(int i = 0; i < 4; i++)
 	{
 		vfo[VFO_A].band[i].decod_mode = DEMOD_LSB;
 		vfo[VFO_B].band[i].decod_mode = DEMOD_LSB;
 	}
+
 	// Init frequency publics(set diff values so update on LCD will be done)
-	df.tune_old 	= bandInfo[ts.band].tune;
-	df.tune_new 	= bandInfo[ts.band].tune;
-	df.selected_idx = 3; 		// 1 Khz startup step
+	df.tune_old 	= 0;
+	df.tune_new 	= 3500001;
+	df.selected_idx = T_STEP_1KHZ_IDX; 		// 1 Khz startup step
 	df.tuning_step	= tune_steps[df.selected_idx];
 	df.temp_factor	= 0;
 	df.temp_factor_changed = false;
 	df.temp_enabled = 0;		// startup state of TCXO
 
 	UiDriver_InitBandSet();
-
-	// Set virtual segments initial value (diff than zero!)
-	df.dial_digits[8]	= 0;
-	df.dial_digits[7]	= 0;
-	df.dial_digits[6]	= 0;
-	df.dial_digits[5]	= 0;
-	df.dial_digits[4]	= 0;
-	df.dial_digits[3]	= 0;
-	df.dial_digits[2]	= 0;
-	df.dial_digits[1]	= 0;
-	df.dial_digits[0]	= 0;
 }
 
 /**
@@ -2350,14 +2424,16 @@ static void UiDriver_InitFrequency()
 void UiDriver_DisplayBandForFreq(uint32_t freq)
 {
 	// here we maintain our local state of the last band shown
-	uint8_t band_scan = RadioManagement_GetBand(freq);
-	if(band_scan != ts.band_effective || band_scan == BAND_MODE_GEN)        // yes, did the band actually change?
-	{
+    const BandInfo* band = RadioManagement_GetBand(freq);
 
-		UiDriver_DisplayBand(band_scan);    // yes, update the display with the current band
-		UiDriver_HandlePowerLevelChange(band_scan, ts.power_level); // also validate power level if band changes
+    // yes, did the tx band actually change?
+    // or are we in the generic band (i.e. outside tx bands)
+	if(band != ts.band_effective || RadioManagement_IsGenericBand(band))
+	{
+		UiDriver_DisplayBand(band);    // yes, update the display with the current band
+		UiDriver_HandlePowerLevelChange(band, ts.power_level); // also validate power level if band changes
 	}
-	ts.band_effective = band_scan;
+	ts.band_effective = band;
 }
 
 
@@ -2468,50 +2544,58 @@ void UiDriver_UpdateFrequency(bool force_update, enum UpdateFrequencyMode_t mode
 
 
 
-static void UiDriver_UpdateFreqDisplay(ulong dial_freq, uint8_t* dial_digits, ulong pos_x_loc, ulong font_width, ulong pos_y_loc, ushort color, uchar digit_size)
+static void UiDriver_UpdateFreqDisplay(uint32_t dial_freq, uint32_t pos_x_loc, uint32_t pos_y_loc, uint16_t color, uint8_t digit_font)
 {
-	{
+    uint8_t digits[MAX_DIGITS];
+    uint8_t last_non_zero = 0;
+    const uint8_t font_width = UiLcdHy28_TextWidth("0",digit_font);
 
-#define MAX_DIGITS 9
-		ulong dial_freq_temp;
-		int8_t pos_mult[MAX_DIGITS] = {9, 8, 7, 5, 4, 3, 1, 0, -1};
-		uint32_t idx;
-		uint8_t digits[MAX_DIGITS];
-		char digit[2];
-		uint8_t last_non_zero = 0;
+    // Terminate string for digit
+    char digit[2];
+    digit[1] = 0;
 
-		// Terminate string for digit
-		digit[1] = 0;
-		// calculate the digits
-		dial_freq_temp = dial_freq;
-		for (idx = 0; idx < MAX_DIGITS; idx++)
-		{
-			digits[idx] = dial_freq_temp % 10;
-			dial_freq_temp /= 10;
-			if (digits[idx] != 0) last_non_zero = idx;
-		}
-		for (idx = 0; idx < MAX_DIGITS; idx++)
-		{
-			// -----------------------
-			// See if digit needs update
-			if ((digits[idx] != dial_digits[idx]) || ts.refresh_freq_disp)
-			{
-				bool noshow = idx > last_non_zero;
-				// don't show leading zeros, except for the 0th digits
-				digit[0] = noshow?' ':0x30 + (digits[idx] & 0x0F);
-				// Update segment
-				UiLcdHy28_PrintText((pos_x_loc + pos_mult[idx] * font_width), pos_y_loc, digit, color, Black, digit_size);
-			}
-		}
+    // calculate the digits
+    uint32_t dial_freq_temp = dial_freq;
+    for (uint32_t idx = 0; idx < MAX_DIGITS; idx++)
+    {
+        digits[idx] = dial_freq_temp % 10;
+        dial_freq_temp /= 10;
+        if (digits[idx] != 0) last_non_zero = idx;
+    }
 
-		for (idx = 3; idx < MAX_DIGITS; idx+=3)
-		{
-			bool noshow = last_non_zero < idx;
-			digit[0] = noshow?' ':'.';
-			UiLcdHy28_PrintText(pos_x_loc+ (pos_mult[idx]+1) * font_width,pos_y_loc,digit,color,Black,digit_size);
-		}
+    const uint16_t group_space = 3* font_width + font_width/2;
 
-	}
+    const uint16_t x_right = pos_x_loc + (9* font_width);
+
+    for (uint32_t idx = 3; idx < MAX_DIGITS; idx+=3)
+    {
+        bool noshow = last_non_zero < idx;
+        int digit_group = idx / 3; // we group every 3 digits
+
+        digit[0] = '.';
+        uint32_t dot_clr = noshow?Black:color;
+        if (digit_font != 5)
+        {
+            UiLcdHy28_PrintText(x_right - (digit_group * group_space) + font_width/2 + 1  ,pos_y_loc,digit,dot_clr,Black,digit_font);
+        }
+        else
+        {
+            UiLcdHy28_PrintText(x_right - (digit_group * group_space) + font_width ,pos_y_loc,digit,dot_clr,Black,digit_font);
+        }
+    }
+
+    for (uint32_t idx = 0; idx < MAX_DIGITS; idx++)
+    {
+        int digit_group = idx / 3; // we group every 3 digits
+        int digit_idx = idx % 3;
+
+        bool noshow = idx > last_non_zero;
+        // don't show leading zeros, except for the 0th digits
+        digit[0] = noshow?'0':0x30 + (digits[idx] & 0x0F);
+        uint32_t digit_clr = noshow?Black:color;
+        // Update segment
+        UiLcdHy28_PrintText(x_right -  digit_idx * font_width - (digit_group * group_space), pos_y_loc, digit, digit_clr, Black, digit_font);
+    }
 }
 
 //*----------------------------------------------------------------------------
@@ -2522,46 +2606,38 @@ static void UiDriver_UpdateFreqDisplay(ulong dial_freq, uint8_t* dial_digits, ul
 //* Output Parameters   :
 //* Functions called    :
 //*----------------------------------------------------------------------------
-static void UiDriver_UpdateLcdFreq(ulong dial_freq,ushort color, ushort mode)
+static void UiDriver_UpdateLcdFreq(uint32_t dial_freq, uint16_t color, uint16_t mode)
 {
-	uchar		digit_size;
-	ulong		pos_y_loc;
-	ulong		pos_x_loc;
-	ulong		font_width;
-	uint8_t*		digits_ptr;
+	uint8_t		digit_font;
 
-	//
-	//
 	if(ts.frequency_lock)
 	{
 		// Frequency is locked - change color of display
 		color = Grey;
 	}
 
-	//
 	if(mode == UFM_AUTOMATIC)
 	{
-		if(is_splitmode())  	// in "split" mode?
-		{
-			mode = UFM_SMALL_RX;				// yes - update upper, small digits (receive frequency)
-		}
-		else
-		{
-			mode = UFM_LARGE;				// NOT in split mode:  large, normal-sized digits
-		}
+	    mode = is_splitmode() ? UFM_SMALL_RX : UFM_LARGE;
+		// in "split" mode?
+		// yes - update upper, small digits (receive frequency)
+		// no  - large, normal-sized digits
 	}
 
-	// if (mode != UFM_SECONDARY) {
-	ts.refresh_freq_disp = true; //because of coloured digits...
-	// }
+	uint32_t disp_freq;
+
 	if(ts.xverter_mode)	 	// transverter mode active?
 	{
-		dial_freq *= (ulong)ts.xverter_mode;	// yes - scale by LO multiplier
-		dial_freq += ts.xverter_offset;	// add transverter frequency offset
-		if(dial_freq > 1000000000)		// over 1000 MHz?
-			dial_freq -= 1000000000;		// yes, offset to prevent overflow of display
-		if(ts.xverter_mode && mode != UFM_SECONDARY)	// if in transverter mode, frequency is yellow unless we do the secondary display
-			color = Yellow;
+		disp_freq = dial_freq * ts.xverter_mode + ts.xverter_offset;
+		// yes - scale by LO multiplier and add transverter frequency offset
+		if(ts.xverter_mode && mode != UFM_SECONDARY)	// if in transverter mode, frequency is blue2 unless we do the secondary display
+		{
+			color = Blue2;
+		}
+	}
+	else
+	{
+	    disp_freq = dial_freq;
 	}
 
 	// Handle frequency display offset in "CW RX" modes
@@ -2574,65 +2650,59 @@ static void UiDriver_UpdateLcdFreq(ulong dial_freq,ushort color, ushort mode)
 		case CW_OFFSET_AUTO_RX:	// in "auto" mode with display offset?
 			if(ts.cw_lsb)
 			{
-				dial_freq -= ts.cw_sidetone_freq;		// yes - LSB - lower display frequency by sidetone amount
+				disp_freq -= ts.cw_sidetone_freq;		// yes - LSB - lower display frequency by sidetone amount
 			}
 			else
 			{
-				dial_freq += ts.cw_sidetone_freq;		// yes - USB - raise display frequency by sidetone amount
+				disp_freq += ts.cw_sidetone_freq;		// yes - USB - raise display frequency by sidetone amount
 			}
 			break;
 		}
 	}
 
+    uint16_t       pos_y_loc;
+    uint16_t       pos_x_loc;
+
 	switch(mode)
 	{
 	case UFM_SMALL_RX:
-		digits_ptr  = df.dial_digits;
-		digit_size = 0;
+		digit_font = 0;
 		pos_y_loc = ts.Layout->TUNE_FREQ.y;
 		pos_x_loc = ts.Layout->TUNE_SPLIT_FREQ_X;
-		font_width = SMALL_FONT_WIDTH;
 		break;
 	case UFM_SMALL_TX:					// small digits in lower location
-		digits_ptr  = df.dial_digits;
-		digit_size = 0;
+		digit_font = 0;
 		pos_y_loc = ts.Layout->TUNE_SPLIT_FREQ_Y_TX;
 		pos_x_loc = ts.Layout->TUNE_SPLIT_FREQ_X;
-		font_width = SMALL_FONT_WIDTH;
 		break;
 	case UFM_SECONDARY:
-		digits_ptr  = df.sdial_digits;
-		digit_size = 0;
+		digit_font = 0;
 		pos_y_loc = ts.Layout->TUNE_SFREQ.y;
 		pos_x_loc = ts.Layout->TUNE_SFREQ.x;
-		font_width = SMALL_FONT_WIDTH;
 		break;
 	case UFM_LARGE:
 	default:			// default:  normal sized (large) digits
-		digits_ptr  = df.dial_digits;
 #ifdef USE_8bit_FONT
-		digit_size=ts.FreqDisplayFont==0?1:5;
+		digit_font=ts.FreqDisplayFont==0?1:5;
 #else
-		digit_size = 1;
+		digit_font = 1;
 #endif
 		pos_y_loc = ts.Layout->TUNE_FREQ.y;
 		pos_x_loc = ts.Layout->TUNE_FREQ.x;
-		font_width = LARGE_FONT_WIDTH;
 	}
+
 	// in SAM mode, never display any RIT etc., but
 	// use small display for display of the carrier frequency that the PLL has locked to
-	if(((ts.dmod_mode == DEMOD_SAM && mode == UFM_SMALL_RX) || (ts.dmod_mode == DEMOD_SAM && mode == UFM_SECONDARY)))
+	if(ts.dmod_mode == DEMOD_SAM && (mode == UFM_SMALL_RX || mode == UFM_SECONDARY))
 	{
-		digits_ptr  = df.sdial_digits;
-		digit_size = 0;
+		digit_font = 0;
 		pos_y_loc = ts.Layout->TUNE_SFREQ.y;
 		pos_x_loc = ts.Layout->TUNE_SFREQ.x;
-		font_width = SMALL_FONT_WIDTH;
-		UiDriver_UpdateFreqDisplay(dial_freq + ads.carrier_freq_offset, digits_ptr, pos_x_loc, font_width, pos_y_loc, Yellow, digit_size);
+		disp_freq += ads.carrier_freq_offset;
+		color = Yellow;
 	}
-	else {
-		UiDriver_UpdateFreqDisplay(dial_freq, digits_ptr, pos_x_loc, font_width, pos_y_loc, color, digit_size);
-	}
+
+    UiDriver_UpdateFreqDisplay(disp_freq, pos_x_loc, pos_y_loc, color, digit_font);
 }
 
 //*----------------------------------------------------------------------------
@@ -2644,28 +2714,24 @@ static void UiDriver_UpdateLcdFreq(ulong dial_freq,ushort color, ushort mode)
 //*----------------------------------------------------------------------------
 void UiDriver_ChangeTuningStep(uchar is_up)
 {
-	ulong 	idx = df.selected_idx;
-	uint8_t idx_limit = T_STEP_MAX_STEPS -1;
+    const int8_t step = is_up ? +1 : -1;
+
+	int32_t idx = df.selected_idx;
+
+	int8_t idx_limit = T_STEP_MAX_STEPS;
 
 	if((!ts.xvtr_adjust_flag) && (!ts.xverter_mode))
 	{
 		// are we NOT in "transverter adjust" or transverter mode *NOT* on?
-		idx_limit = T_STEP_100KHZ_IDX;
+		idx_limit = T_STEP_1MHZ_IDX;
 	}
 
-	if(is_up)
+	idx = (idx + step + idx_limit) % idx_limit;
+
+	// 9kHz step only on MW and LW, skip otherwise
+	if(idx == T_STEP_9KHZ_IDX && ((df.tune_old) > 1600001))
 	{
-		idx= (idx>=idx_limit)?0:idx+1;
-		// 9kHz step only on MW and LW
-		if(idx == T_STEP_9KHZ_IDX && ((df.tune_old) > 1600001))
-			idx ++;
-	}
-	else
-	{
-		idx= (idx==0)?idx_limit:idx-1;
-		// 9kHz step only on MW and LW
-		if(idx == T_STEP_9KHZ_IDX && ((df.tune_old) > 1600001))
-			idx --;
+			idx+= step;
 	}
 
 	df.tuning_step	= tune_steps[idx];
@@ -2676,6 +2742,68 @@ void UiDriver_ChangeTuningStep(uchar is_up)
 
 }
 
+static void UiDriver_ShowTxErrorMessages()
+{
+    // if there is no power factor ( == no output power)
+    // or effective bias is 0 (== no or very distorted output)
+    // inform operator
+	const bool no_tx_power = ts.tx_power_factor == 0;
+	const bool no_bias = (ts.dmod_mode != DEMOD_CW && ts.pa_bias == 0) || (ts.dmod_mode == DEMOD_CW && ts.pa_cw_bias == 0 && ts.pa_bias == 0);
+	
+
+    if (RadioManagement_IsTxDisabled() == false && (no_tx_power || no_bias))
+    {
+        UiDriver_DisplayMessageStart();
+		int display_time = 3000;
+		
+        const uint16_t scope_middle_y = sd.Slayout->full.h/2+sd.Slayout->full.y;
+        
+		const char* txp = NULL;
+		
+		if (no_bias && no_tx_power) 
+		{ 
+			txp = "No TX power and no bias.\nCheck PA calibration!";
+		} 
+		else if (no_bias) 
+		{
+			txp = "PA BIAS is 0.\nAdjust Bias before TX!";
+		} 
+		else if (no_tx_power)
+		{
+			txp = "PA TX Power Factor is 0.\nAdjust TX power for band!";
+		}
+		
+		if(ts.menu_mode)
+		{
+			// we assume tune is used for power calibration when in menu mode
+			if (ts.tune)
+			{
+				// we disable display of error message if bias is set.
+				if (no_bias == false)
+				{
+					txp = NULL;
+				}
+				else
+				{
+					txp = "PA BIAS is 0.\nAdjust Bias before TX!";
+				}
+			}
+			else
+			{
+				// shorter display time 
+				display_time = 1000;
+			}
+		}
+    	
+		if (display_time > 0 && txp != NULL)
+		{
+        	UiLcdHy28_PrintTextCentered(sd.Slayout->full.x, scope_middle_y-6, sd.Slayout->full.w,txp,Red,Black,0);
+
+        	HAL_Delay(display_time);
+		}
+        UiDriver_DisplayMessageStop();
+    }
+}
 
 /*----------------------------------------------------------------------------
  * @brief Scans buttons 0-16:  0-15 are normal buttons, 16 is power button, 17 touch
@@ -2843,6 +2971,10 @@ static void UiDriver_TxRxUiSwitch(enum TRX_States_t state)
 
 			// force redisplay of Encoder boxes and values
 			UiDriver_RefreshEncoderDisplay();
+
+			// if there is a need to tell the operator something related to
+			// the tx mode (such as PA not configured correctly) we do this now.
+			UiDriver_ShowTxErrorMessages();
 		}
 		else if (state == TRX_STATE_TX_TO_RX)
 		{
@@ -3126,25 +3258,16 @@ static void UiDriver_ChangeToNextDemodMode(bool select_alternative_mode)
 }
 
 /**
- * @brief band change
- * @param vfo_sel	VFO A/B
- * @param curr_band_index
+ * @brief band memory switch. Sets VFO to use the values of specified band memory. Does not store "old" values.
+ *
+ * @param vfo_sel	which VFO A/B to use
  * @param new_band_index
  */
-void UiDriver_UpdateBand(uint16_t vfo_sel, uint8_t curr_band_index, uint8_t new_band_index)
+void UiDriver_SelectBandMemory(uint16_t vfo_sel, uint8_t new_band_index)
 {
 
 		// TODO: There is a strong similarity to code in UiDriverProcessFunctionKeyClick around line 2053
-		// Load frequency value - either from memory or default for
-		// the band if this is first band selection
-		if(vfo[vfo_sel].band[new_band_index].dial_value != 0xFFFFFFFF)
-		{
-			df.tune_new = vfo[vfo_sel].band[new_band_index].dial_value;	// Load value from VFO
-		}
-		else
-		{
-			df.tune_new = bandInfo[curr_band_index].tune; 					// Load new frequency from startup
-		}
+		df.tune_new = vfo[vfo_sel].band[new_band_index].dial_value;	// Load value from VFO
 
 		bool new_lsb = RadioManagement_CalculateCWSidebandMode();
 
@@ -3166,8 +3289,9 @@ void UiDriver_UpdateBand(uint16_t vfo_sel, uint8_t curr_band_index, uint8_t new_
 			RadioManagement_SetDemodMode(new_dmod_mode);
 		}
 
-		// Finally update public flag
-		ts.band = new_band_index;
+		// Finally update public flag by setting the
+		// appropriate bandInfo
+		ts.band = RadioManagement_GetBandInfo(new_band_index);
 
 		UiDriver_UpdateDisplayAfterParamChange();    // because mode/filter may have changed
 		UiVk_Redraw();		//virtual keypads call (refresh purpose)
@@ -3177,24 +3301,22 @@ void UiDriver_UpdateBand(uint16_t vfo_sel, uint8_t curr_band_index, uint8_t new_
  * @brief initiate band change.
  * @param is_up select the next higher band, otherwise go to the next lower band
  */
-static void UiDriver_ChangeBand(uchar is_up)
+static void UiDriver_ChangeBand(bool is_up)
 {
 
 	// Do not allow band change during TX
 	if(ts.txrx_mode != TRX_MODE_TX)
 	{
 
+		vfo_name_t vfo_sel = get_active_vfo();
 
-
-		uint16_t vfo_sel = is_vfo_b()?VFO_B:VFO_A;
-
-		uint8_t curr_band_index = ts.band; // index in band table of currently selected band
+		uint8_t curr_band_index = ts.band->band_mode; // index in band table of currently selected band
 
 
 		// Save old band values
 		if(curr_band_index < (MAX_BANDS) && ts.cat_band_index == 255)
 		{
-			// Save dial
+			// Save dial, but only if we are not in "CAT mode"
 			vfo[vfo_sel].band[curr_band_index].dial_value = df.tune_old;
 			vfo[vfo_sel].band[curr_band_index].decod_mode = ts.dmod_mode;
 			vfo[vfo_sel].band[curr_band_index].digital_mode = ts.digital_mode;
@@ -3207,37 +3329,21 @@ static void UiDriver_ChangeBand(uchar is_up)
 		uint8_t   new_band_index = curr_band_index;     // index of the new selected band
 		// in case of no other band enabled, we stay in this band
 
-		// Handle direction
-		if(is_up)
+		// we start checking the index following (is_up) or preceding (!is_up) the current one
+		// until we reach an enabled band
+		for (int idx  = 1; idx <= MAX_BANDS; idx++)
 		{
-		    // we start checking the index following the current one
-		    // until we reach an enabled band
-		    for (int idx  = 1; idx <= MAX_BANDS; idx++)
+		    uint32_t test_idx = (curr_band_index + ((is_up == true) ? idx : (MAX_BANDS-idx)))% MAX_BANDS;
+#ifndef USE_MEMORY_MODE
+		    if (band_enabled[test_idx])
+#endif
 		    {
-		        uint32_t test_idx = (curr_band_index + idx) % MAX_BANDS;
-		        if (vfo[vfo_sel].enabled[test_idx])
-		        {
-		            new_band_index = test_idx;
-		            break; // we found the first enabled band following the current one
-		        }
+		        new_band_index = test_idx;
+		        break; // we found the first enabled band following the current one
 		    }
 		}
-		else
-		{
-            // we start checking the index before the current one
-            // until we reach an enabled band
-            for (int idx = MAX_BANDS-1; idx >= 0; idx--)
-            {
-                uint32_t test_idx = (curr_band_index + idx) % MAX_BANDS;
-                if (vfo[vfo_sel].enabled[test_idx])
-                {
-                    new_band_index = test_idx;
-                    break; // we found the first enabled band before the current one
-                }
-            }
-		}
 
-		UiDriver_UpdateBand(vfo_sel, curr_band_index, new_band_index);
+		UiDriver_SelectBandMemory(vfo_sel, new_band_index);
 	}
 }
 
@@ -3294,19 +3400,49 @@ static bool UiDriver_CheckFrequencyEncoder()
 
 		if (ts.flags1 & FLAGS1_DYN_TUNE_ENABLE)   // check if dynamic tuning has been activated by touchscreen
 		{
-			if ((enc_speed_avg > 80) || (enc_speed_avg < (-80)))
+		    if (!(ts.expflags1 & EXPFLAGS1_SMOOTH_DYNAMIC_TUNE))        // Smooth dynamic tune is OFF
 			{
-				enc_multiplier = 10;    // turning medium speed -> increase speed by 10
-			}
+				if ((enc_speed_avg > 80) || (enc_speed_avg < (-80)))
+				{
+					enc_multiplier = 10;    // turning medium speed -> increase speed by 10
+				}
 
-			if ((enc_speed_avg > 160) || (enc_speed_avg < (-160)))
-			{
-				enc_multiplier = 40;    //turning fast speed -> increase speed by 100
-			}
+				if ((enc_speed_avg > 160) || (enc_speed_avg < (-160)))
+				{
+					enc_multiplier = 40;    //turning fast speed -> increase speed by 100
+				}
 
-			if ((enc_speed_avg > 300) || (enc_speed_avg < (-300)))
-			{
-				enc_multiplier = 100;    //turning fast speed -> increase speed by 100
+				if ((enc_speed_avg > 300) || (enc_speed_avg < (-300)))
+				{
+					enc_multiplier = 100;    //turning fast speed -> increase speed by 100
+				}
+			}
+            else
+            {
+                if      ((enc_speed_avg > 350) || (enc_speed_avg < (-350)))
+                {
+                    enc_multiplier = 100;    // turning medium speed -> increase speed by 100
+                }
+                else if ((enc_speed_avg > 250) || (enc_speed_avg < (-250)))
+                {
+                    enc_multiplier =  50;    //turning fast speed -> increase speed by 50
+                }
+                else if ((enc_speed_avg > 180) || (enc_speed_avg < (-180)))
+                {
+                    enc_multiplier =  12;    //turning fast speed -> increase speed by 12
+                }
+                else if ((enc_speed_avg >  90) || (enc_speed_avg < (- 90)))
+                {
+                    enc_multiplier =   6;    //turning fast speed -> increase speed by 6
+                }
+                else if ((enc_speed_avg >  45) || (enc_speed_avg < (- 45)))
+                {
+                    enc_multiplier =   3;    //turning fast speed -> increase speed by 3
+                }
+                else if ((enc_speed_avg >  30) || (enc_speed_avg < (- 30)))
+                {
+                    enc_multiplier =   2;    //turning fast speed -> increase speed by 2
+                }
 			}
 
 			if ((df.tuning_step == 10000) && (enc_multiplier > 10))
@@ -3454,19 +3590,48 @@ static void UiDriver_CheckEncoderTwo()
 
 				enc_multiplier = 1; //set standard speed
 
-				if ((enc_speed_avg > 80) || (enc_speed_avg < (-80)))
+				if (!(ts.expflags1 & EXPFLAGS1_SMOOTH_DYNAMIC_TUNE))        // Smooth dynamic tune is OFF
 				{
-					enc_multiplier = 10;    // turning medium speed -> increase speed by 10
+					if ((enc_speed_avg > 80) || (enc_speed_avg < (-80)))
+					{
+						enc_multiplier = 10;    // turning medium speed -> increase speed by 10
+					}
+					if ((enc_speed_avg > 150) || (enc_speed_avg < (-150)))
+					{
+						enc_multiplier = 30;    //turning fast speed -> increase speed by 100
+					}
+					if ((enc_speed_avg > 300) || (enc_speed_avg < (-300)))
+					{
+						enc_multiplier = 100;    //turning fast speed -> increase speed by 100
+					}
 				}
-				if ((enc_speed_avg > 150) || (enc_speed_avg < (-150)))
-				{
-					enc_multiplier = 30;    //turning fast speed -> increase speed by 100
+                else
+                {
+                    if      ((enc_speed_avg > 350) || (enc_speed_avg < (-350)))
+                    {
+                        enc_multiplier = 100;    // turning medium speed -> increase speed by 100
+                    }
+                    else if ((enc_speed_avg > 250) || (enc_speed_avg < (-250)))
+                    {
+                        enc_multiplier =  50;    //turning fast speed -> increase speed by 50
+                    }
+                    else if ((enc_speed_avg > 180) || (enc_speed_avg < (-180)))
+                    {
+                        enc_multiplier =  12;    //turning fast speed -> increase speed by 12
+                    }
+                    else if ((enc_speed_avg >  90) || (enc_speed_avg < (- 90)))
+                    {
+                        enc_multiplier =   6;    //turning fast speed -> increase speed by 6
+                    }
+                    else if ((enc_speed_avg >  45) || (enc_speed_avg < (- 45)))
+                    {
+                        enc_multiplier =   3;    //turning fast speed -> increase speed by 3
+                    }
+                    else if ((enc_speed_avg >  30) || (enc_speed_avg < (- 30)))
+                    {
+                        enc_multiplier =   2;    //turning fast speed -> increase speed by 2
+                    }
 				}
-				if ((enc_speed_avg > 300) || (enc_speed_avg < (-300)))
-				{
-					enc_multiplier = 100;    //turning fast speed -> increase speed by 100
-				}
-
 
 				// used for notch and peak
 				float32_t MAX_FREQ = 5000.0;
@@ -3525,7 +3690,7 @@ static void UiDriver_CheckEncoderTwo()
 					if (is_dsp_nr())        // only allow adjustment if DSP NR is active
 					{	//
 				    	uint8_t nr_step = DSP_NR_STRENGTH_STEP;
-				    	if(ts.dsp.nr_strength >= 190)
+				    	if(ts.dsp.nr_strength >= 190 || ts.dsp.nr_strength <= 10)
 				    	{
 				    		nr_step = 1;
 				    	}
@@ -3533,6 +3698,10 @@ static void UiDriver_CheckEncoderTwo()
 			        	if(ts.dsp.nr_strength == 189)
 			        	{
 			        		ts.dsp.nr_strength = 185;
+			        	}
+			        	if(ts.dsp.nr_strength == 11)
+			        	{
+			        		ts.dsp.nr_strength = 15;
 			        	}
 
 						// this causes considerable noise
@@ -4306,7 +4475,16 @@ static void UiDriver_DisplayModulationType()
 	switch(ts.dmod_mode)
 	{
 	case DEMOD_DIGI:
-		txt = digimodes[ts.digital_mode].label;
+#if defined(USE_FREEDV)
+	    if  (ts.digital_mode == DigitalMode_FreeDV)
+	    {
+	        txt = freedv_modes[freedv_conf.mode].label;
+	    }
+	    else
+#endif
+	    {
+	        txt = digimodes[ts.digital_mode].label;
+	    }
 		break;
 	case DEMOD_LSB:
 	case DEMOD_USB:
@@ -4329,29 +4507,38 @@ static void UiDriver_DisplayModulationType()
 	}
 	//fdv_clear_display();
 }
+/**
+ * Converts a power value in mW into useful null-terminated string
+ * @param txt char array of at least 5 characters
+ * @param txt_len length of txt array
+ * @param power_mW power value, if 0 result is "FULL"
+ */
+void UiDriver_Power2String(char* txt, size_t txt_len,uint32_t power_mW)
+{
+    if (power_mW == 0 )
+    {
+        snprintf(txt,txt_len,"FULL");
+    }
+    else if (power_mW < 100)
+    {
+        snprintf(txt,txt_len,"%ldmW",power_mW);
+    }
+    else if (power_mW < 1000)
+    {
+        snprintf(txt,txt_len,"0.%ldW",power_mW/100);
+    }
+    else
+    {
+        snprintf(txt,txt_len,"%ldW",power_mW/1000);
+    }
+}
 
 static void UiDriver_DisplayPowerLevel()
 {
     uint16_t fg_clr = White;
     char txt[5];
-    char* txt_ptr = txt;
 
-    if (ts.power == 0 )
-    {
-        txt_ptr = "FULL";
-    }
-    else if (ts.power < 100)
-    {
-        snprintf(txt,sizeof(txt),"%ldmW",ts.power);
-    }
-    else if (ts.power < 1000)
-    {
-        snprintf(txt,sizeof(txt),"0.%ldW",ts.power/100);
-    }
-    else
-    {
-        snprintf(txt,sizeof(txt),"%ldW",ts.power/1000);
-    }
+    UiDriver_Power2String(txt,sizeof(txt),ts.power);
 
     uint16_t bg_clr = Blue; // normal operation
 
@@ -4372,7 +4559,7 @@ static void UiDriver_DisplayPowerLevel()
         bg_clr = Orange;
     }
 
-	UiLcdHy28_PrintTextCentered((ts.Layout->PW_IND.x),(ts.Layout->PW_IND.y),ts.Layout->PW_IND.w,txt_ptr,fg_clr,bg_clr,0);
+	UiLcdHy28_PrintTextCentered((ts.Layout->PW_IND.x),(ts.Layout->PW_IND.y),ts.Layout->PW_IND.w,txt,fg_clr,bg_clr,0);
 }
 
 static void UiDriver_DisplayDbm()
@@ -4649,6 +4836,8 @@ static bool UiDriver_SaveConfiguration()
 {
 	bool savedConfiguration = true;
 
+	const uint16_t scope_middle_y = sd.Slayout->full.h/2+sd.Slayout->full.y;
+
 	const char* txp;
 	uint16_t txc;
 
@@ -4664,7 +4853,7 @@ static bool UiDriver_SaveConfiguration()
 		txp = "Detected problems: Not saving";
 		savedConfiguration = false;
 	}
-	UiLcdHy28_PrintTextCentered(sd.Slayout->full.x,sd.Slayout->full.h/2+sd.Slayout->full.y-6,sd.Slayout->full.w,txp,Blue,Black,0);
+	UiLcdHy28_PrintTextCentered(sd.Slayout->full.x, scope_middle_y-6, sd.Slayout->full.w,txp,Blue,Black,0);
 
 	if (savedConfiguration)
 	{
@@ -4680,7 +4869,7 @@ static bool UiDriver_SaveConfiguration()
 			txc = Red;
 			savedConfiguration = false;
 		}
-		UiLcdHy28_PrintTextCentered(sd.Slayout->full.x,sd.Slayout->full.h/2+sd.Slayout->full.y+6,sd.Slayout->full.w,txp,txc,Black,0);
+		UiLcdHy28_PrintTextCentered(sd.Slayout->full.x, scope_middle_y+6, sd.Slayout->full.w,txp,txc,Black,0);
 	}
 	return savedConfiguration;
 }
@@ -5840,7 +6029,9 @@ void UiDriver_StartUpScreenFinish()
 
 	uint32_t hold_time;
 
-	UiDriver_StartupScreen_LogIfProblem(osc->isPresent() == false, "Local Oscillator NOT Detected!");
+	bool osc_present_problem = osc->isPresent() == false;
+
+	UiDriver_StartupScreen_LogIfProblem(osc_present_problem, "Local Oscillator NOT Detected!");
 
 	if(!Si5351a_IsPresent() && RadioManagement_TcxoIsEnabled())
 	{
@@ -5863,6 +6054,16 @@ void UiDriver_StartUpScreenFinish()
 	  UiDriver_StartupScreen_LogIfProblem((HAL_ADC_GetValue(&hadc2) > MAX_VSWR_MOD_VALUE) && (HAL_ADC_GetValue(&hadc3) > MAX_VSWR_MOD_VALUE),
 			"SWR Bridge resistor mod NOT completed!");
 	}
+
+	// we report this problem only if we are theoretically able to transmit
+	// and tx was not disabled such as in a RX only device
+    if (RadioManagement_IsTxDisabled() == false && osc_present_problem == false)
+    {
+        bool pa_bias_problem = ts.pa_bias == 0;
+        UiDriver_StartupScreen_LogIfProblem(pa_bias_problem,
+              "PA Bias is 0, TX not possible");
+    }
+
 	if (UiDriver_FirmwareVersionCheck())
 	{
 		hold_time = 10000; // 10s
@@ -5871,6 +6072,7 @@ void UiDriver_StartUpScreenFinish()
 
 		UiDriver_FirmwareVersionUpdateConfig();
 	}
+
 
 	if(startUpError == true)
 	{
@@ -5927,7 +6129,7 @@ void UiAction_ChangeLowerMeterUp()
  * @param dsp_mode a valid dsp mode id
  * @return true if dsp_mode is currently available, false otherwise
  */
-static bool UiDriver_IsDspModePermitted(uint16_t dsp_mode)
+static bool UiDriver_IsDspModePermitted(dsp_mode_t dsp_mode)
 {
     bool neg_retval = dsp_mode >= DSP_SWITCH_MAX;
 
@@ -5935,10 +6137,10 @@ static bool UiDriver_IsDspModePermitted(uint16_t dsp_mode)
     neg_retval |= ts.dmod_mode == DEMOD_CW && ( dsp_mode == DSP_SWITCH_NR_AND_NOTCH || dsp_mode == DSP_SWITCH_NOTCH);
 
     // prevent NR AND NOTCH, when in AM and decimation rate equals 2 --> high CPU load)
-    neg_retval |= (dsp_mode == DSP_SWITCH_NR_AND_NOTCH) && (ts.dmod_mode == DEMOD_AM) && (ts.filters_p->sample_rate_dec == RX_DECIMATION_RATE_24KHZ);
+    neg_retval |= (dsp_mode == DSP_SWITCH_NR_AND_NOTCH) && (ts.dmod_mode == DEMOD_AM) && (ads.decimated_freq >= 24000);
 
     // prevent using a mode not enabled in the dsp mode selection (i.e. user configured it to be not used, although available)
-    neg_retval |= (ts.dsp.mode_mask&(1<<ts.dsp.mode)) == 0;
+    neg_retval |= (ts.dsp.mode_mask&(1<<dsp_mode)) == 0;
 
     // not forbidden, so return true;
     return neg_retval == false;
@@ -6132,21 +6334,13 @@ static void UiAction_SaveConfigurationToMemory()
 {
 	if(ts.txrx_mode == TRX_MODE_RX)	 				// only allow EEPROM write in receive mode
 	{
-		UiSpectrum_Clear();
+		UiDriver_DisplayMessageStart();
 		UiDriver_SaveConfiguration();
 		HAL_Delay(3000);
+        UiDriver_DisplayMessageStop();
 
 		ts.menu_var_changed = 0;                    // clear "EEPROM SAVE IS NECESSARY" indicators
 		UiDriver_DisplayFButton_F1MenuExit();
-
-		if(ts.menu_mode)
-		{
-			UiMenu_RenderMenu(MENU_RENDER_ONLY);    // update menu display, was destroyed by message
-		}
-		else
-		{
-			UiSpectrum_Init();          // not in menu mode, redraw spectrum scope
-		}
 	}
 }
 
@@ -6195,23 +6389,23 @@ void UiAction_ChangeFrequencyByTouch()
 {
 	if (ts.frequency_lock == false)
 	{
-		int step = 2000;				// adjust to 500Hz
+		int step = 500;				// adjust to 500Hz
 
 		if(sd.magnify == 3)
 		{
-			step = 400;					// adjust to 100Hz
+			step = 100;					// adjust to 100Hz
 		}
 		if(sd.magnify == 4)
 		{
-			step = 40;					// adjust to 10Hz
+			step = 10;					// adjust to 10Hz
 		}
 		if(sd.magnify == 5)
 		{
-			step = 4;					// adjust to 1Hz
+			step = 1;					// adjust to 1Hz
 		}
 		if(ts.dmod_mode == DEMOD_AM || ts.dmod_mode == DEMOD_SAM)
 		{
-			step = 20000;				// adjust to 5KHz
+			step = 5000;				// adjust to 5KHz
 		}
 
 		//int16_t line =sd.marker_pos[0] + UiSpectrum_GetSpectrumStartX();
@@ -6412,9 +6606,17 @@ static void UiAction_PlayKeyerBtnN(int8_t n)
 		 * so it keeps pointer to the last available element in array for macro
 		 * to put there terminator
 		 */
-		while (( ++c <= KEYER_MACRO_LEN - 1) && DigiModes_TxBufferRemove( pmacro++, UI ))
-		{}
+		while (( ++c <= KEYER_MACRO_LEN - 1 ) && DigiModes_TxBufferRemove( pmacro, UI ))
+		{
+		    pmacro++;
+		}
 		*pmacro = '\0';
+
+		// strip out the spaces from the end of line
+		while(( pmacro != ts.keyer_mode.macro[n] ) && *--pmacro == ' ' )
+		{
+			*pmacro = '\0';
+		}
 
 		UiConfiguration_UpdateMacroCap();
 		UiDriver_TextMsgPutChar('<');
@@ -6937,20 +7139,24 @@ void UiDriver_TaskHandler_HighPrioTasks()
 {
     // READ THE LENGTHY COMMENT ABOVE BEFORE CHANGING ANYTHING BELOW!!!
     // YES, READ IT! Thank you!
-#ifdef USE_FREEDV
-    if (ts.dmod_mode == DEMOD_DIGI && ts.digital_mode == DigitalMode_FreeDV)
+    if (ads.af_disabled == false)
     {
-        FreeDv_HandleFreeDv();
-    }
+        // we only process these audio things if rx data processing is active
+#ifdef USE_FREEDV
+        if (ts.dmod_mode == DEMOD_DIGI && ts.digital_mode == DigitalMode_FreeDV)
+        {
+            FreeDv_HandleFreeDv();
+        }
 #endif // USE_FREEDV
 
 #ifdef USE_ALTERNATE_NR
-    if ((is_dsp_nb_active() || is_dsp_nr()) && (ads.decimation_rate == 4))
-    {
+        if ((is_dsp_nb_active() || is_dsp_nr()) && (ads.decimated_freq == 12000))
+        {
 
-        AudioNr_HandleNoiseReduction();
-    }
+            AudioNr_HandleNoiseReduction();
+        }
 #endif
+    }
 #ifdef USE_HIGH_PRIO_PTT
     if (RadioManagement_SwitchTxRx_Possible())
     {
@@ -7277,7 +7483,7 @@ void UiDriver_TaskHandler_MainTasks()
 					RTC_TimeTypeDef sTime;
 
 
-					MchfRtc_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+					Rtc_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
 
 					char str[20];
 					snprintf(str,20,"%2u:%02u:%02u",sTime.Hours,sTime.Minutes,sTime.Seconds);

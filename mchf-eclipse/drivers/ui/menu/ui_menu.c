@@ -626,7 +626,7 @@ const char* UiMenu_GetSystemInfo(uint32_t* m_clr_ptr, int info_item)
       		snprintf(out,32, "D%s", UHSDR_VERSION+4);
 		  #endif
 		#else
-    	  snprintf(out,32, "%s", UHSDR_VERSION+4);
+			snprintf(out,32, "%s", UHSDR_VERSION+4);
     	#endif
     }
     break;
@@ -701,7 +701,8 @@ bool __attribute__ ((noinline)) UiDriverMenuBandPowerAdjust(int var, MenuProcess
      volatile uint8_t* adj_ptr = &ts.pwr_adj[pa_level == PA_LEVEL_FULL?ADJ_FULL_POWER:ADJ_REF_PWR][band_mode];
 
     bool tchange = false;
-    if((band_mode == RadioManagement_GetBand(df.tune_old)) && (ts.power_level == pa_level))
+    const BandInfo* band = RadioManagement_GetBand(df.tune_old);
+    if((band_mode == band->band_mode) && (ts.power_level == pa_level))
     {
         tchange = UiDriverMenuItemChangeUInt8(var, mode, adj_ptr,
                                               TX_POWER_FACTOR_MIN,
@@ -712,7 +713,7 @@ bool __attribute__ ((noinline)) UiDriverMenuBandPowerAdjust(int var, MenuProcess
 
         if(tchange)	 		// did something change?
         {
-            RadioManagement_SetPowerLevel(band_mode, pa_level);	// yes, update the power factor
+            RadioManagement_SetPowerLevel(band, pa_level);	// yes, update the power factor
         }
     }
     else
@@ -725,11 +726,11 @@ bool __attribute__ ((noinline)) UiDriverMenuBandPowerAdjust(int var, MenuProcess
     return tchange;
 }
 
-bool __attribute__ ((noinline))  UiDriverMenuBandRevCouplingAdjust(int var, MenuProcessingMode_t mode, uint8_t filter_band, char* options, uint32_t* clr_ptr)
+bool __attribute__ ((noinline))  UiDriverMenuBandRevCouplingAdjust(int var, MenuProcessingMode_t mode, uint8_t coupling_band, char* options, uint32_t* clr_ptr)
 {
     bool tchange = false;
-    volatile uint8_t *adj_ptr = &swrm.coupling_calc[filter_band];
-    if(ts.filter_band == filter_band)	 	// is this band selected?
+    volatile uint8_t *adj_ptr = &swrm.coupling_calc[coupling_band];
+    if(ts.coupling_band == coupling_band)	 	// is this band selected?
     {
         tchange = UiDriverMenuItemChangeUInt8(var, mode, adj_ptr,
                                               SWR_COUPLING_MIN,
@@ -738,7 +739,7 @@ bool __attribute__ ((noinline))  UiDriverMenuBandRevCouplingAdjust(int var, Menu
                                               1
                                              );
     }
-    if((ts.txrx_mode != TRX_MODE_TX) || (ts.filter_band != filter_band))	// Orange if not in TX mode or NOT on this band
+    if((ts.txrx_mode != TRX_MODE_TX) || (ts.coupling_band != coupling_band))	// Orange if not in TX mode or NOT on this band
         *clr_ptr = Orange;
     sprintf(options, "  %u", *adj_ptr);
     return tchange;
@@ -786,7 +787,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
     {
     case MENU_DSP_NR_STRENGTH:  // DSP Noise reduction strength
     	nr_step = DSP_NR_STRENGTH_STEP;
-    	if(ts.dsp.nr_strength >= 190)
+    	if(ts.dsp.nr_strength >= 190 || ts.dsp.nr_strength <= 10)
     	{
     		nr_step = 1;
     	}
@@ -801,6 +802,10 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
         	if(ts.dsp.nr_strength == 189)
         	{
         		ts.dsp.nr_strength = 185;
+        	}
+        	if(ts.dsp.nr_strength == 11)
+        	{
+        		ts.dsp.nr_strength = 15;
         	}
         	// did it change?
             if(ts.dsp.active & DSP_NR_ENABLE)   // only change if DSP active
@@ -1482,6 +1487,23 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
                 UiDriver_RefreshEncoderDisplay(); // maybe shown on encoder boxes
             }
         }
+        break;
+    case MENU_MIC_TYPE:    // selecting a mic type determines a mic boost level (for now: one of two boost gains)
+        UiDriverMenuItemChangeUInt8(var, mode, &ts.tx_mic_boost,
+                                    0,
+                                    MIC_BOOST_DYNAMIC, // 14 dB (Dynamic)
+                                    MIC_BOOST_DEFAULT, //  0 dB (Electret)
+                                    1
+                                   );
+        //
+        if(ts.tx_mic_boost > 0)
+		{
+            txt_ptr = " Dynamic";
+		}
+		else
+		{
+            txt_ptr = "Electret";
+		}
         break;
     case MENU_MIC_GAIN: // Mic Gain setting
 
@@ -2482,6 +2504,15 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
     case CONFIG_BAND_BUTTON_SWAP:   // Swap position of Band+ and Band- buttons
         var_change = UiDriverMenuItemChangeEnableOnOffFlag(var, mode, &ts.flags1,0,options,&clr, FLAGS1_SWAP_BAND_BTN);
         break;
+    case CONFIG_BANDEF_SELECT:
+        var_change = UiDriverMenuItemChangeUInt8(var, mode, &bandinfo_idx,0,BAND_INFO_SET_NUM-1,0,1);
+        if (var_change)
+        {
+            bandInfo = bandInfos[bandinfo_idx].bands;
+            UiDriver_UpdateDisplayAfterParamChange();
+        }
+        snprintf(options,32,"     %s",bandInfos[bandinfo_idx].name);
+        break;
     case CONFIG_TX_DISABLE: // Step size button swap on/off
     {
         uint16_t flag = ts.tx_disable;
@@ -2779,6 +2810,21 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
     UI_MENU_CONFIG_IQ_TX_ADJ(10M)
     UI_MENU_CONFIG_IQ_TX_ADJ(10M_UP)
 
+        case CONFIG_VSWR_PROTECTION_THRESHOLD:
+            var_change = UiDriverMenuItemChangeUInt8(var, mode, &ts.vswr_protection_threshold,
+                    1,
+                   10,
+                    1,
+                    1);
+            if (ts.vswr_protection_threshold < 2)
+            {
+                txt_ptr = "OFF";
+            }
+            else
+            {
+                snprintf(options,32,"     %d",ts.vswr_protection_threshold);
+            }
+            break;
 
     case CONFIG_CW_PA_BIAS:     // CW PA Bias adjust
         if((ts.tune) || (ts.txrx_mode == TRX_MODE_TX))      // enable only in TUNE mode
@@ -2958,55 +3004,55 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
 
 
     case CONFIG_2200M_5W_ADJUST:        // 2200m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_2200, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_2200, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_630M_5W_ADJUST:     // 630m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_630, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_630, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_160M_5W_ADJUST:     // 160m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_160, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_160, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_80M_5W_ADJUST:      // 80m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_80, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_80, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_60M_5W_ADJUST:      // 60m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_60, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_60, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_40M_5W_ADJUST:      // 40m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_40, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_40, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_30M_5W_ADJUST:      // 30m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_30, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_30, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_20M_5W_ADJUST:      // 20m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_20, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_20, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_17M_5W_ADJUST:      // 17m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_17, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_17, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_15M_5W_ADJUST:      // 15m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_15, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_15, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_12M_5W_ADJUST:      // 12m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_12, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_12, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_10M_5W_ADJUST:      // 10m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_10, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_10, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_6M_5W_ADJUST:       // 6m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_6, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_6, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_4M_5W_ADJUST:       // 4m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_4, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_4, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_2M_5W_ADJUST:       // 2m 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_2, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_2, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_70CM_5W_ADJUST:     // 70cm 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_70, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_70, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_23CM_5W_ADJUST:     // 23cm 5 watt adjust
-        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_23, PA_LEVEL_5W, options, &clr);
+        UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_23, PA_LEVEL_HIGH, options, &clr);
         break;
     case CONFIG_2200M_FULL_POWER_ADJUST:        // 2200m 5 watt adjust
         UiDriverMenuBandPowerAdjust(var, mode, BAND_MODE_2200, PA_LEVEL_FULL, options, &clr);
@@ -3385,32 +3431,23 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
         }
         ts.menu_var_changed = temp_var_u8;
         break;
+
         case CONFIG_TUNE_POWER_LEVEL: // set power for antenne tuning
             var_change = UiDriverMenuItemChangeUInt8(var*(-1), mode, &ts.tune_power_level,
                                                   0,
                                                   PA_LEVEL_TUNE_KEEP_CURRENT,
                                                   PA_LEVEL_TUNE_KEEP_CURRENT,
                                                   1);
-            switch(ts.tune_power_level)
+
+            if (ts.tune_power_level < mchf_power_levelsInfo.count)
             {
-            case PA_LEVEL_FULL:
-                txt_ptr = "FULL POWER";
-                break;
-            case PA_LEVEL_5W:
-                txt_ptr = "        5W";
-                break;
-            case PA_LEVEL_2W:
-                txt_ptr = "        2W";
-                break;
-            case PA_LEVEL_1W:
-                txt_ptr = "        1W";
-                break;
-            case PA_LEVEL_0_5W:
-                txt_ptr = "      0.5W";
-                break;
-            case PA_LEVEL_TUNE_KEEP_CURRENT:
+                char txt[5];
+                UiDriver_Power2String(txt,sizeof(txt),mchf_power_levelsInfo.levels[ts.tune_power_level].mW);
+                snprintf(options,32,"       %s",txt);
+            }
+            else
+            {
                 txt_ptr = " as TX PWR";
-                break;
             }
             break;
 #if 0
@@ -3629,7 +3666,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
     case CONFIG_RTC_HOUR:
     {
         RTC_TimeTypeDef rtc;
-        MchfRtc_GetTime(&hrtc, &rtc, RTC_FORMAT_BIN);
+        Rtc_GetTime(&hrtc, &rtc, RTC_FORMAT_BIN);
         rtc.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
         rtc.StoreOperation = RTC_STOREOPERATION_SET;
 
@@ -3648,7 +3685,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
     case CONFIG_RTC_MIN:
     {
         RTC_TimeTypeDef rtc;
-        MchfRtc_GetTime(&hrtc, &rtc, RTC_FORMAT_BIN);
+        Rtc_GetTime(&hrtc, &rtc, RTC_FORMAT_BIN);
         rtc.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
         rtc.StoreOperation = RTC_STOREOPERATION_SET;
 
@@ -3667,7 +3704,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
     case CONFIG_RTC_SEC:
     {
         RTC_TimeTypeDef rtc;
-        MchfRtc_GetTime(&hrtc, &rtc, RTC_FORMAT_BIN);
+        Rtc_GetTime(&hrtc, &rtc, RTC_FORMAT_BIN);
         rtc.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
         rtc.StoreOperation = RTC_STOREOPERATION_SET;
 
@@ -3693,7 +3730,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
                                                1);
          if(var_change)      // did something change?
          {
-             MchfRtc_SetPpm(ts.rtc_calib);
+             Rtc_SetPpm(ts.rtc_calib);
          }
          snprintf(options,32, "%4dppm", ts.rtc_calib);
          break;
@@ -3704,7 +3741,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
         clr = White;
         if(var>=1)
         {
-            MchfRtc_Start();
+            Rtc_Start();
             Board_Reboot();
             // TODO: we will not reach this but in future we may switch the keyboard dynamically...
             txt_ptr = " Done!";
@@ -3717,7 +3754,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
         clr = White;
         if(var>=1)
         {
-            MchfRtc_FullReset();
+            Rtc_FullReset();
 
             txt_ptr = " Done!";
             clr = Green;
@@ -4171,6 +4208,7 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
         snprintf(options,32,"     %s",digimodes[ts.digital_mode].label);
         clr = digimodes[ts.digital_mode].enabled?White:Red;
         break;
+
     case CONFIG_CAT_PTT_RTS:
         var_change = UiDriverMenuItemChangeEnableOnOffBool(var, mode, &ts.enable_ptt_rts,0,options,&clr);
         break;
@@ -4258,21 +4296,53 @@ void UiMenu_UpdateItem(uint16_t select, MenuProcessingMode_t mode, int pos, int 
             snprintf(options,32,"     %d",sm.config.alphaSplit.DecayAlpha);
             break;
 
-        case MENU_DEBUG_VSWR_PROTECTION_THRESHOLD:
-            var_change = UiDriverMenuItemChangeUInt8(var, mode, &ts.debug_vswr_protection_threshold,
-                    1,
-                    6,
-                    1,
+
+#ifdef USE_FREEDV
+        case MENU_DEBUG_FREEDV_MODE:
+            temp_var_u8 = freedv_conf.mode;
+            var_change = UiDriverMenuItemChangeUInt8(var, mode, &temp_var_u8,
+                    0,
+                    freedv_modes_num-1,
+                    0,
                     1);
-            if (ts.debug_vswr_protection_threshold < 2)
+            if (var_change)
             {
-                txt_ptr = "OFF";
+                if (FreeDV_SetMode(temp_var_u8, false) == false)
+                {
+                    clr = Red;
+                }
+            }
+
+            txt_ptr = freedv_modes[freedv_conf.mode].name;
+            break;
+
+        case MENU_DEBUG_FREEDV_SQL_THRESHOLD:
+            var_change = UiDriverMenuItemChangeUInt8(var, mode, &freedv_conf.squelch_snr_thresh,
+                    FDV_SQUELCH_OFF,
+                    FDV_SQUELCH_MAX,
+                    FDV_SQUELCH_DEFAULT,
+                    1);
+
+            if (var_change)
+            {
+                FreeDV_Squelch_Update(&freedv_conf);
+            }
+
+            if (FreeDV_Is_Squelch_Enable(&freedv_conf))
+            {
+                snprintf(options,32,"     %ld",FreeDV_Get_Squelch_SNR(&freedv_conf));
             }
             else
             {
-                snprintf(options,32,"     %d",ts.debug_vswr_protection_threshold);
+                txt_ptr = "OFF";
             }
             break;
+#endif
+        case MENU_DEBUG_SMOOTH_DYN_TUNE:
+            var_change = UiDriverMenuItemChangeEnableOnOffFlag(var, mode, &ts.expflags1,0,options,&clr, EXPFLAGS1_SMOOTH_DYNAMIC_TUNE);
+            clr = White;
+            break;
+
     default:                        // Move to this location if we get to the bottom of the table!
         txt_ptr = "ERROR!";
         break;

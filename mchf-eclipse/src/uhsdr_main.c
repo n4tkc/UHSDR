@@ -53,9 +53,7 @@
 // Misc
 #include "drivers/audio/softdds/softdds.h"
 
-// Eeprom
-#include "misc/v_eprom/eeprom.h"
-//
+#include "uhsdr_flash.h" // only for EEPROM_START_ADDRESS
 #include "drivers/ui/radio_management.h"
 //
 
@@ -95,6 +93,39 @@ void HAL_GPIO_EXTI_Callback (uint16_t GPIO_Pin)
 }
 
 /**
+ * Detects if a special bootloader is used and configures some settings
+ * Used for debugging and testing purposes only
+ */
+void Main_DetectSpecialBootloader()
+{
+    // detection routine for special bootloader version strings which do enable debug or development functions
+    char out[14];
+    for(uint8_t* begin = (uint8_t*)0x8000000; begin < (uint8_t*)EEPROM_START_ADDRESS-8; begin++)
+    {
+        if (memcmp("Version: ",begin,9) == 0)
+        {
+            snprintf(out,13, "%s", &begin[9]);
+            for (uint8_t i=1; i<13; i++)
+            {
+                if (out[i] == '\0')
+                {
+                    if (out[i-1] == 'a')
+                    {
+                        ts.special_functions_enabled = 1;
+                    }
+                    if (out[i-1] == 's')
+                    {
+                        ts.special_functions_enabled = 2;
+                    }
+                    break;
+                }
+            }
+            break;
+        }
+    }
+}
+
+/**
  * All data inside the ts data structure which needs a non-zero value set at startup AND
  * is either used before the configuration has been loaded OR which is not loaded from the persistent configuration
  * should be initialized here.
@@ -110,7 +141,7 @@ void TransceiverStateInit(void)
 
     //CONFIG LOADED: ts.band		  		= BAND_MODE_20;			// band from eeprom
     ts.rx_temp_mute		= false;					// used in muting audio during band change
-    ts.filter_band		= 0;					// used to indicate the bpf filter selection for power detector coefficient selection
+    ts.filter_band		= FILTER_BAND_UNKNOWN;	// used to indicate the bpf filter selection for power detector coefficient selection
     ts.dmod_mode 		= DEMOD_USB;				// demodulator mode
     //CONFIG LOADED: ts.rx_gain[RX_AUDIO_SPKR].value = AUDIO_GAIN_DEFAULT;
     ts.rx_gain[RX_AUDIO_DIG].value		= DIG_GAIN_DEFAULT;
@@ -140,7 +171,9 @@ void TransceiverStateInit(void)
     ts.menu_mode		= 0;					// menu mode
     ts.menu_item		= 0;					// menu item selection
     ts.menu_var			= 0;					// menu item change variable
-    ts.menu_var_changed	= 0;					// TRUE if a menu variable was changed and that an EEPROM save should be done
+    ts.menu_var_changed	        = 0;				// TRUE if a menu variable was changed and that an EEPROM save should be done
+
+    //NO INIT NEEDED? SET BEFORE USE? ts.tx_mic_boost             = MIC_BOOST_DEFAULT;		// no extra gain. electret element assumed
 
     //CONFIG LOADED:ts.tx_audio_source	= TX_AUDIO_MIC;				// default source is microphone
     //NO INIT NEEDED, SET BEFORE USE: ts.tx_mic_gain_mult	= MIC_GAIN_DEFAULT;			// actual operating value for microphone gain
@@ -165,7 +198,6 @@ void TransceiverStateInit(void)
     //CONFIG LOADED:ts.xverter_mode		= 0;					// TRUE if transverter mode is active (e.g. offset of display)
     //CONFIG LOADED:ts.xverter_offset	= 0;					// Frequency offset in transverter mode (added to frequency display)
 
-    ts.refresh_freq_disp	= 1;					// TRUE if frequency/color display is to be refreshed when next called - NORMALLY LEFT AT 0 (FALSE)!!!
     // This is NOT reset by the LCD function, but must be enabled/disabled externally
 
     //CONFIG LOADED:ts.demod_mode_disable			= 0;		// TRUE if a specific mode is to be disabled
@@ -282,10 +314,11 @@ void TransceiverStateInit(void)
 
     ts.debug_si5351a_pllreset = 2;		//start with "reset on IQ Divider"
 
-    ts.debug_vswr_protection_threshold = 0; // OFF
+    ts.vswr_protection_threshold = 1; // OFF
 
-    ts.band_effective = 255; // this is an invalid band number, which will trigger a redisplay of the band name and the effective power
+    //CONFIG LOADED:ts.expflags1 = 0; // Used to hold flags for options in Debug/Expert menu, stored in EEPROM location "EEPROM_EXPFLAGS1"
 
+    ts.band_effective = NULL; // this is an invalid band number, which will trigger a redisplay of the band name and the effective power
 }
 
 // #include "Trace.h"
@@ -314,9 +347,6 @@ int mchfMain(void)
 
     ///trace_puts("Hello mcHF World!");
     // trace_printf(" %u\n", 1u);
-
-
-    *(__IO uint32_t*)(SRAM2_BASE) = 0x0;	// clearing delay prevent for bootloader
 
     // Set default transceiver state
     TransceiverStateInit();
@@ -347,33 +377,8 @@ int mchfMain(void)
     // here, so we simply set reverse to false
     UiLcdHy28_TouchscreenInit(0);
 
-#if 1
-	// detection routine for special bootloader version strings which do enable debug or development functions
-	char out[14];
-    for(uint8_t* begin = (uint8_t*)0x8000000; begin < (uint8_t*)EEPROM_START_ADDRESS-8; begin++)
-    {
-    	if (memcmp("Version: ",begin,9) == 0)
-        {
-        	snprintf(out,13, "%s", &begin[9]);
-        	for (uint8_t i=1; i<13; i++)
-        	{
-        	  if (out[i] == '\0')
-        	  {
-        		if (out[i-1] == 'a')
-        		{
-				  ts.special_functions_enabled = 1;
-				}
-        		if (out[i-1] == 's')
-        		{
-				  ts.special_functions_enabled = 2;
-				}
-			  break;
-			  }
-			}
-        break;
-        }
-	}
-#endif
+
+    Main_DetectSpecialBootloader();
 
     UiDriver_Init();
 
@@ -414,7 +419,7 @@ int mchfMain(void)
     ts.rx_gain[RX_AUDIO_SPKR].value_old = 0;		// Force update of volume control
 
 #ifdef USE_FREEDV
-    FreeDV_mcHF_init();
+    FreeDV_Init();
     // we now try to place a marker after last dynamically
     // allocated memory
     Canary_Create();

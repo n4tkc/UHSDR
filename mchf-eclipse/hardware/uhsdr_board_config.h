@@ -26,8 +26,8 @@
 #if !defined(BOOTLOADER_BUILD)
 // The rf boards we want to support, but the bootloader should compile for all if possible.
 // so we don't tell the bootloader which one we have
-    #if !defined(RF_BRD_OVI40) && !defined(RF_BRD_MCHF)
-        #error At least one rf board must be selected: RF_BRD_MCHF, RF_BRD_OVI40
+    #if !defined(RF_BRD_OVI40) && !defined(RF_BRD_MCHF) && !defined(RF_BRD_LAPWING)
+        #error At least one rf board must be selected: RF_BRD_MCHF, RF_BRD_OVI40, RF_BRD_LAPWING
     #else
         #if defined(RF_BRD_OVI40)
             #include "UHSDR_RF_ovi40_config.h"
@@ -193,6 +193,13 @@
 #define USE_32_IQ_BITS
 #define USE_32_AUDIO_BITS
 
+// OPTION: Instead of band names for memories and enabling only band memories which are supported
+// by the current RF board, use all available memories
+// this changes the displayed memory name to Mem<Num> instead of Bnd<Wavelength>
+#ifdef RF_BRD_LAPWING
+    #define USE_MEMORY_MODE
+    #define DEFAULT_MEMORY_FREQ (1240000000)
+#endif
 
 // for now: These are fixed.
 #define IQ_SAMPLE_RATE (48000)
@@ -211,6 +218,14 @@
 // use for clocking based on DMA IRQ
 #define SAMPLES_PER_DMA_CYCLE   (IQ_BLOCK_SIZE)
 #define SAMPLES_PER_CENTISECOND (IQ_SAMPLE_RATE/100)
+
+
+#ifdef STM32F4
+    #define USE_SIMPLE_FREEDV_FILTERS
+    #define USE_FREEDV_1600
+#else
+    #define USE_FREEDV_700D
+#endif
 
 
 #if (IQ_SAMPLE_RATE) != 48000

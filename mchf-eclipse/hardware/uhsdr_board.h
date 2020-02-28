@@ -89,6 +89,14 @@ typedef enum {
 #define VOICE_TX2RX_DELAY_DEFAULT			450	// Delay for switching when going from TX to RX (this is 0.66uS units)
 //
 
+// IQ source RX demodulation
+enum
+{
+    RX_IQ_CODEC = 0,    // IQ from codec
+    RX_IQ_DIGIQ,        // IQ from USB audio
+    RX_IQ_DIG,          // demodulated audio
+    RX_IQ_NUM
+};
 // Audio sources for TX modulation
 #define TX_AUDIO_MIC			0
 #define TX_AUDIO_LINEIN_L		1
@@ -232,6 +240,8 @@ typedef struct vfo_reg_s
 //    uint32_t filter_mode;
 } VfoReg;
 
+typedef struct BandInfo BandInfo; // forward declaration of BandInfo data type, we need this to be able to make a pointer to it.
+
 // Transceiver state public structure
 typedef struct TransceiverState
 {
@@ -273,9 +283,6 @@ typedef struct TransceiverState
     uint32_t	tune_freq;			// main synthesizer frequency
     uint32_t	tune_freq_req;		// used to detect change of main synthesizer frequency
 
-    // Transceiver calibration mode flag
-    //uint8_t	calib_mode;
-
     // Transceiver menu mode variables
     uint8_t	menu_mode;		// TRUE if in menu mode
     int16_t	menu_item;		// Used to indicate specific menu item
@@ -284,11 +291,13 @@ typedef struct TransceiverState
 
     // Ham band public flag
     // index of bands table in Flash
-    uint8_t 	band; // this band idx does not relate to the real frequency, it is a "just" a memory index.
-    uint8_t     band_effective; // the band the currently selected frequency is in (which may be different from the band memory idx);
+    const BandInfo*     band; // this band does not relate to the real frequency, it "just" a band memory.
+    const BandInfo*     band_effective; // the band the currently selected frequency is in (which may be different from the band memory idx);
 
     bool	rx_temp_mute;
     uint8_t	filter_band;		// filter selection band:  1= 80, 2= 60/40, 3=30/20, 4=17/15/12/10 - used for selection of power detector coefficient selection.
+#define FILTER_BAND_UNKNOWN 255 // used to indicate that we don't know how the BPF is set
+    uint8_t coupling_band;      // which tx wattmeter coupling factor value to use
     //
     // Receive/Transmit public flag
     uint8_t 	txrx_mode;
@@ -310,8 +319,6 @@ typedef struct TransceiverState
     uint8_t	tx_meter_mode;				// meter mode
 
     // Audio filter ID
-    // uint8_t	filter_id;
-    //
     uint8_t   filter_select[AUDIO_FILTER_NUM];
 
 
@@ -370,6 +377,15 @@ typedef struct TransceiverState
     bool    power_modified; // the actual power is lower than the requested power_level, e.g. because of out side band.
 
     uint8_t 	tx_audio_source;
+    uint8_t     rx_iq_source;
+//
+    uint8_t     tx_mic_boost;		// in dB
+
+#define MIC_BOOST_DEFAULT		 0	// 0 dB boost (no boost)
+#define MIC_BOOST_MIN			 0
+#define MIC_BOOST_DYNAMIC       14  // 14 dB boost ( 25.1)
+#define MIC_BOOST_MAX			20	// 20 dB boost (100.0) {more is not better}
+//
     uint32_t	tx_mic_gain_mult;
     uint8_t	tx_gain[TX_AUDIO_NUM];
     int16_t	tx_comp_level;			// Used to hold compression level which is used to calculate other values for compression.  0 = manual.
@@ -404,7 +420,6 @@ typedef struct TransceiverState
     uint8_t	xverter_mode;		// TRUE if transverter mode active
     uint32_t	xverter_offset;		// frequency offset for transverter (added to frequency display)
 
-    bool	refresh_freq_disp;		// TRUE if frequency display display is to be refreshed
     //
     // Calibration factors for output power, in percent (100 = 1.00)
     //
@@ -463,8 +478,8 @@ typedef struct TransceiverState
 #define TX_DISABLE_RXMODE       8
     uint8_t	tx_disable;		// >0 if no transmit permitted, use RadioManagement_IsTxDisabled() to get boolean
 
-
     uint16_t	flags1;					// Used to hold individual status flags, stored in EEPROM location "EEPROM_FLAGS1"
+
 #define FLAGS1_TX_AUTOSWITCH_UI_DISABLE 0x01    // if on-screen AFG/(STG/CMP) and WPM/(MIC/LIN) indicators are changed on TX
 #define FLAGS1_SWAP_BAND_BTN			0x02    // if BAND-/BAND+ buttons are to be swapped in their positions
 #define FLAGS1_MUTE_LINEOUT_TX			0x04    // if TX audio output from LINE OUT is to be muted during transmit (audio output only enabled when translate mode is DISABLED
@@ -481,6 +496,25 @@ typedef struct TransceiverState
 #define FLAGS1_TX_OUTSIDE_BANDS			0x2000  // 1 = TX outside bands enabled
 #define FLAGS1_REVERSE_X_TOUCHSCREEN	0x4000  // 1 = X direcction of touchscreen is mirrored
 #define FLAGS1_REVERSE_Y_TOUCHSCREEN	0x8000  // 1 = Y direcction of touchscreen is mirrored
+
+    uint16_t    expflags1;              // Used to hold flags for options in Debug/Expert menu, stored in EEPROM location "EEPROM_EXPFLAGS1"
+#define EXPFLAGS1_SMOOTH_DYNAMIC_TUNE   0x01    // 1 = Smooth dynamic tune is ON
+// #define EXPFLAGS1_RESERVE_1          0x02    // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_2          0x04    // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_3          0x08    // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_4          0x10    // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_5          0x20    // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_6          0x40    // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_7          0x80    // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_8          0x100   // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_9          0x200   // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_10         0x400   // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_11         0x800   // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_12         0x1000  // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_13         0x2000  // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_14         0x4000  // Reserve flag for options in Debug/Expert menu
+// #define EXPFLAGS1_RESERVE_15         0x8000  // Reserve flag for options in Debug/Expert menu
+#define EXPFLAGS1_CONFIG_DEFAULT        0x0000  // Default flags state
 
 #ifdef UI_BRD_MCHF
     // the default screen needs no reversed touch
@@ -665,7 +699,7 @@ typedef struct TransceiverState
 
 	bool paddles_active; // setting this to false disables processing of external gpio interrupts (right now just the paddles/PTT)
 
-	uint8_t debug_vswr_protection_threshold; // 0 - protection OFF
+    uint8_t vswr_protection_threshold; // 1 - protection OFF
 
 	// noise reduction gain display in spectrum
     int16_t  nr_gain_display; // 0 = do not display gains, 1 = display bin gain in spectrum display, 2 = display long_tone_gain

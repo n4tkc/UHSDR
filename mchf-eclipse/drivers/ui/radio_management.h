@@ -21,8 +21,12 @@
 #ifndef DRIVERS_UI_RADIO_MANAGEMENT_H_
 #define DRIVERS_UI_RADIO_MANAGEMENT_H_
 
+#include "uhsdr_types.h"
 #include "uhsdr_board.h"
 // Frequency public structure
+
+#define MAX_DIGITS 10
+
 typedef struct DialFrequency
 {
     // pot values
@@ -48,12 +52,6 @@ typedef struct DialFrequency
 #define TCXO_UNIT_MASK 0x10
 #define TCXO_UNIT_C 0x00
 #define TCXO_UNIT_F 0x10
-
-
-    // Virtual segments
-    uint8_t dial_digits[9];
-    // Second display
-    uint8_t sdial_digits[9];
 
 } DialFrequency;
 
@@ -99,18 +97,16 @@ inline bool RadioManagement_TcxoIsFahrenheit()
 typedef enum
 {
     PA_LEVEL_FULL = 0,
-    PA_LEVEL_5W,
-    PA_LEVEL_2W,
-    PA_LEVEL_1W,
-    PA_LEVEL_0_5W,
+    PA_LEVEL_HIGH,
+    PA_LEVEL_MEDIUM,
+    PA_LEVEL_LOW,
+    PA_LEVEL_MINIMAL,
     PA_LEVEL_TUNE_KEEP_CURRENT
 } power_level_t;
 
 
 typedef struct {
     power_level_t id;
-    char* name;
-    float32_t power_factor;
     int32_t   mW;
 } power_level_desc_t;
 
@@ -121,8 +117,20 @@ typedef struct {
 
 extern const pa_power_levels_info_t mchf_power_levelsInfo;
 
+typedef struct
+{
+    char* name;
+    float32_t  reference_power;
+    uint32_t  max_freq;
+    uint32_t  min_freq;
+    int32_t max_am_power;
+    int32_t max_power; // power level upper limit, used for display
+} pa_info_t;
 
-#define PA_LEVEL_DEFAULT        PA_LEVEL_2W     // Default power level
+extern const pa_info_t mchf_pa;
+
+
+#define PA_LEVEL_DEFAULT        PA_LEVEL_MEDIUM     // Default power level
 
 #define DEFAULT_FREQ_OFFSET     3000              // Amount of offset (at LO freq) when loading "default" frequency
 
@@ -171,25 +179,50 @@ typedef struct BandInfo
     uint32_t tune;
     uint32_t size;
     const char* name;
+    uint32_t band_mode;
 } BandInfo;
 
-extern const BandInfo bandInfo[MAX_BAND_NUM];
+/**
+ *
+ * @param band
+ * @return true if band is the so called generic band (everything which is not ham tx)
+ */
+static inline bool RadioManagement_IsGenericBand(const BandInfo* band)
+{
+    return band->size == 0;
+}
+
+typedef struct
+{
+    const BandInfo** bands;
+    const char* name;
+} BandInfoSet;
+
+extern const BandInfoSet bandInfos[];
+extern const int BAND_INFO_SET_NUM;
+extern uint8_t bandinfo_idx;
+
+typedef const BandInfo BandInfo_c;
+extern BandInfo_c **bandInfo;
 
 typedef struct band_regs_s
 {
     VfoReg band[MAX_BAND_NUM];
-    bool enabled[MAX_BAND_NUM]; // we store which band is to be used (or ignored)
 } BandRegs;
 
-enum
+bool band_enabled[MAX_BAND_NUM]; // we store which band is to be used (or ignored)
+
+typedef enum
 {
     // VFO_WORK = 0
     VFO_A = 0,
     VFO_B,
     VFO_MAX
-};
+} vfo_name_t;
 // Working register plus VFO A and VFO B registers.
 extern BandRegs vfo[VFO_MAX];
+
+vfo_name_t get_active_vfo();
 
 
 // SWR and RF power meter public
@@ -291,12 +324,13 @@ inline bool RadioManagement_IsTxDisabledBy(uint8_t whom)
 }
 
 uint32_t RadioManagement_GetRealFreqTranslationMode(uint32_t txrx_mode, uint32_t dmod_mode, uint32_t iq_freq_mode);
-band_mode_t RadioManagement_GetBand(ulong freq);
-bool RadioManagement_FreqIsInBand(const BandInfo* bandinfo, const uint32_t freq);
-bool RadioManagement_SetPowerLevel(band_mode_t band, power_level_t power_level);
+const BandInfo* RadioManagement_GetBand(ulong freq);
+bool RadioManagement_FreqIsInBand(BandInfo_c * bandinfo, const uint32_t freq);
+bool RadioManagement_FreqIsInEnabledBand ( uint32_t freq );
+const BandInfo* RadioManagement_GetBandInfo(uint8_t new_band_index);
+bool RadioManagement_SetPowerLevel(const BandInfo* band, power_level_t power_level);
 bool RadioManagement_Tune(bool tune);
 bool RadioManagement_UpdatePowerAndVSWR();
-void RadioManagement_SetHWFiltersForFrequency(ulong freq);
 void RadioManagement_ChangeCodec(uint32_t codec, bool enableCodec);
 bool RadioManagement_ChangeFrequency(bool force_update, uint32_t dial_freq,uint8_t txrx_mode);
 void RadioManagement_HandlePttOnOff();
